@@ -1,0 +1,144 @@
+{
+  "name": "FOI Reports - MCP Ready",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "foi-reports",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "foi-reports-mcp"
+    },
+    {
+      "parameters": {
+        "url": "https://www.foi.se/rapporter.html",
+        "method": "GET",
+        "options": {}
+      },
+      "id": "fetch-foi-page",
+      "name": "Fetch FOI Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// FOI-sidan använder Vue.js för att rendera rapporter dynamiskt\n// Detta betyder att vi behöver antingen:\n// 1. Headless browser (Airtop, Puppeteer)\n// 2. Ett API-endpoint (om tillgängligt)\n// 3. För nu: mock data som demonstration\n\n// Mock data - de 5 senaste FOI-rapporterna (exempel)\nconst mockReports = [\n  {\n    title: \"AI och nationell säkerhet - Tekniska möjligheter och risker\",\n    date: \"2024-12\",\n    description: \"Rapport om artificiell intelligens och dess påverkan på nationell säkerhet\",\n    pdfUrl: \"https://www.foi.se/rest-api/report/FOI-R--5432--SE\",\n    id: \"FOI-R--5432--SE\"\n  },\n  {\n    title: \"Cybersäkerhet i kritisk infrastruktur\",\n    date: \"2024-11\",\n    description: \"Analys av cyberhot mot Sveriges kritiska infrastruktur\",\n    pdfUrl: \"https://www.foi.se/rest-api/report/FOI-R--5431--SE\",\n    id: \"FOI-R--5431--SE\"\n  },\n  {\n    title: \"Försvarsmaterielsystem och hållbarhet\",\n    date: \"2024-11\",\n    description: \"Studie om hållbarhet i försvarsmateriel\",\n    pdfUrl: \"https://www.foi.se/rest-api/report/FOI-R--5430--SE\",\n    id: \"FOI-R--5430--SE\"\n  },\n  {\n    title: \"Rymdbaserad underrättelseinhämtning\",\n    date: \"2024-10\",\n    description: \"Översikt av satellitbaserad underrättelseinhämtning\",\n    pdfUrl: \"https://www.foi.se/rest-api/report/FOI-R--5429--SE\",\n    id: \"FOI-R--5429--SE\"\n  },\n  {\n    title: \"Kvantteknologi för försvarssektorn\",\n    date: \"2024-10\",\n    description: \"Analys av kvantteknologins möjligheter för försvaret\",\n    pdfUrl: \"https://www.foi.se/rest-api/report/FOI-R--5428--SE\",\n    id: \"FOI-R--5428--SE\"\n  }\n];\n\n// Returnera en rapport per item för nästa steg\nreturn mockReports.map(report => ({\n  json: report\n}));"
+      },
+      "id": "parse-reports",
+      "name": "Parse Reports (Mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "summary-field",
+              "name": "summary",
+              "value": "={{ \"📄 **\" + $json.title + \"**\\n\\n📅 Publicerad: \" + $json.date + \"\\n\\n📝 \" + $json.description + \"\\n\\n🔗 Rapport-ID: \" + $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "title-field",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "date-field",
+              "name": "date",
+              "value": "={{ $json.date }}",
+              "type": "string"
+            },
+            {
+              "id": "id-field",
+              "name": "reportId",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-summary",
+      "name": "Format Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Samla alla rapporter i en enda respons\nconst allReports = $input.all();\n\nconst response = {\n  success: true,\n  count: allReports.length,\n  reports: allReports.map(item => item.json),\n  message: `Hämtade ${allReports.length} senaste FOI-rapporter`,\n  note: \"Detta är mock-data. För riktiga rapporter, uppgradera till browser automation (se dokumentation).\"\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "aggregate-response",
+      "name": "Aggregate Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch FOI Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch FOI Page": {
+      "main": [
+        [
+          {
+            "node": "Parse Reports (Mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Reports (Mock)": {
+      "main": [
+        [
+          {
+            "node": "Format Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Summary": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-12-06T00:00:00.000Z",
+  "versionId": "1"
+}

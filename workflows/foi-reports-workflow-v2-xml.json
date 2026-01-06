@@ -1,0 +1,210 @@
+{
+  "name": "FOI Reports - XML Based (No API Key)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "foi-reports-xml",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "foi-reports-xml"
+    },
+    {
+      "parameters": {
+        "url": "https://www.foi.se/reportindex.xml",
+        "method": "GET",
+        "options": {}
+      },
+      "id": "fetch-report-index",
+      "name": "Fetch Report Index XML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "mode": "xmlToJson",
+        "options": {}
+      },
+      "id": "convert-xml",
+      "name": "Parse XML",
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract report URLs from the parsed XML\nconst xmlData = $json;\n\n// Navigate to urlset > url array\nlet urls = [];\ntry {\n  if (xmlData.urlset && xmlData.urlset.url) {\n    urls = Array.isArray(xmlData.urlset.url) ? xmlData.urlset.url : [xmlData.urlset.url];\n  }\n} catch (e) {\n  console.error('Error parsing XML:', e);\n}\n\n// Get the last 10 URLs (most recent reports tend to be at the end)\n// We'll fetch 10 and then filter to top 5 by actual date\nconst recentUrls = urls.slice(-10);\n\n// Return each URL as a separate item for parallel processing\nreturn recentUrls.map(urlItem => ({\n  json: {\n    reportUrl: urlItem.loc,\n    lastMod: urlItem.lastmod\n  }\n}));"
+      },
+      "id": "extract-report-urls",
+      "name": "Extract Recent Report URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.reportUrl }}",
+        "method": "GET",
+        "options": {}
+      },
+      "id": "fetch-report-page",
+      "name": "Fetch Each Report Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "sourceData": "json",
+        "dataPropertyName": "data",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "title",
+              "cssSelector": "h1, .report-title, [class*=\"title\"]",
+              "returnValue": "innerText"
+            },
+            {
+              "key": "description",
+              "cssSelector": "meta[name=\"description\"]",
+              "returnValue": "attribute",
+              "attributeName": "content"
+            },
+            {
+              "key": "date",
+              "cssSelector": ".publish-date, [class*=\"date\"], time",
+              "returnValue": "innerText"
+            },
+            {
+              "key": "pdfLink",
+              "cssSelector": "a[href*=\".pdf\"], a[href*=\"download\"]",
+              "returnValue": "attribute",
+              "attributeName": "href"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-report-data",
+      "name": "Extract Report Data",
+      "type": "n8n-nodes-base.htmlExtract",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clean and enrich the extracted data\nconst data = $json;\n\n// Extract report number from URL\nconst reportUrl = $('Fetch Each Report Page').item.json.reportUrl || '';\nconst reportNoMatch = reportUrl.match(/reportNo=([^&]+)/);\nconst reportNo = reportNoMatch ? reportNoMatch[1] : 'Unknown';\n\n// Try to extract date from various sources\nlet date = data.date || $('Extract Recent Report URLs').item.json.lastMod || 'Date unknown';\nif (Array.isArray(date)) date = date[0];\n\n// Clean title\nlet title = data.title || 'Title not found';\nif (Array.isArray(title)) title = title[0];\n\n// Clean description\nlet description = data.description || 'No description available';\nif (Array.isArray(description)) description = description[0];\n\n// Build PDF URL\nlet pdfUrl = data.pdfLink || '';\nif (Array.isArray(pdfUrl)) pdfUrl = pdfUrl[0];\nif (pdfUrl && !pdfUrl.startsWith('http')) {\n  pdfUrl = 'https://www.foi.se' + pdfUrl;\n}\n\nreturn [{\n  json: {\n    reportNo,\n    title: title.trim(),\n    date: date.trim(),\n    description: description.trim(),\n    pdfUrl,\n    sourceUrl: reportUrl\n  }\n}];"
+      },
+      "id": "clean-report-data",
+      "name": "Clean Report Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all reports and sort by date\nconst allReports = $input.all().map(item => item.json);\n\n// Try to sort by date (most recent first)\nallReports.sort((a, b) => {\n  const dateA = new Date(a.date);\n  const dateB = new Date(b.date);\n  if (!isNaN(dateA) && !isNaN(dateB)) {\n    return dateB - dateA; // descending\n  }\n  return 0; // keep original order if dates invalid\n});\n\n// Take top 5\nconst top5 = allReports.slice(0, 5);\n\n// Format response\nconst response = {\n  success: true,\n  count: top5.length,\n  reports: top5.map(report => ({\n    summary: `📄 **${report.title}**\\n\\n📅 ${report.date}\\n\\n📝 ${report.description}\\n\\n🔗 ${report.reportNo}\\n\\n📥 PDF: ${report.pdfUrl || 'Ej tillgänglig'}`,\n    title: report.title,\n    date: report.date,\n    reportNo: report.reportNo,\n    pdfUrl: report.pdfUrl,\n    sourceUrl: report.sourceUrl\n  })),\n  message: `Hämtade ${top5.length} senaste FOI-rapporter`,\n  method: \"XML + HTML scraping (no API key required)\"\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "aggregate-and-format",
+      "name": "Aggregate & Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Report Index XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Report Index XML": {
+      "main": [
+        [
+          {
+            "node": "Parse XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse XML": {
+      "main": [
+        [
+          {
+            "node": "Extract Recent Report URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Recent Report URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch Each Report Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Each Report Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Report Data": {
+      "main": [
+        [
+          {
+            "node": "Clean Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Report Data": {
+      "main": [
+        [
+          {
+            "node": "Aggregate & Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-12-06T00:00:00.000Z",
+  "versionId": "2"
+}

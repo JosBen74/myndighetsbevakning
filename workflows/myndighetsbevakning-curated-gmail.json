@@ -1,0 +1,91 @@
+{
+  "name": "Myndighetsbevakning - Curated Articles via Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "readStatus": "unread",
+          "receivedAfter": "={{ $now.minus(1, 'day').toISO() }}"
+        },
+        "options": {}
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const mail = $json;\n\n// Samla text för URL-sökning\nconst textSources = [mail.text, mail.textPlain, mail.snippet, mail.html].filter(Boolean).join('\\n');\n\n// URL\nconst urlMatch = textSources.match(/https?:\\/\\/[^\\s<>\"')]+/);\nif (!urlMatch) throw new Error('Ingen URL hittades i mailet.');\nconst url = urlMatch[0];\n\n// Titel: subject om det finns, annars URL\nlet title =\n  (typeof mail.subject === 'string' && mail.subject.trim()) ||\n  url;\n\n// Kategori (valfritt) från [TAG] i subject\nlet category = 'Myndighetsbevakning';\nconst tagMatch = title.match(/^\\[([^\\]]+)\\]\\s*/);\nif (tagMatch) {\n  category = tagMatch[1].trim();\n  title = title.replace(/^\\[[^\\]]+\\]\\s*/, '').trim();\n}\n\n// Datum\nconst date_added = new Date().toISOString().split('T')[0];\n\nreturn [{\n  json: { title, url, category, date_added, source: 'Myndighetsbevakning', added_via: 'gmail' }\n}];"
+      },
+      "id": "parse-email",
+      "name": "Parse Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "title": "={{ $json.title }}",
+            "url": "={{ $json.url }}",
+            "category": "={{ $json.category }}",
+            "date_added": "={{ $json.date_added }}",
+            "source": "={{ $json.source }}",
+            "added_via": "={{ $json.added_via }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "append-sheet",
+      "name": "Append to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [680, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{"node": "Parse Email", "type": "main", "index": 0}]]
+    },
+    "Parse Email": {
+      "main": [[{"node": "Append to Sheet", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

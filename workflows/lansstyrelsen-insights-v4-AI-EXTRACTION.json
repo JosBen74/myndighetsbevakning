@@ -1,0 +1,471 @@
+{
+  "name": "Länsstyrelsen AI Insights - v4 AI EXTRACTION",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lansstyrelsen-insights",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "lansstyrelsen-insights"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger (Monday 8 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [240, 500]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-triggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst isWebhook = items.some(item => item.json.headers !== undefined);\nconst mode = isWebhook ? 'webhook' : 'scheduled';\n\nlet dateFrom, dateTo;\n\nif (isWebhook && items[0].json.body) {\n  const body = items[0].json.body;\n  dateFrom = body.dateFrom;\n  dateTo = body.dateTo;\n}\n\nif (!dateFrom || !dateTo) {\n  const now = new Date();\n  const sevenDaysAgo = new Date(now);\n  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n  \n  dateFrom = sevenDaysAgo.toISOString().split('T')[0];\n  dateTo = now.toISOString().split('T')[0];\n}\n\nconst testMode = isWebhook && items[0].json.body && items[0].json.body.mode === 'test';\nconst shouldSendEmail = !testMode;\n\nreturn [{\n  json: {\n    mode,\n    testMode,\n    shouldSendEmail,\n    dateFrom,\n    dateTo,\n    executionTime: new Date().toISOString(),\n    debug: {\n      isWebhook,\n      itemCount: items.length,\n      bodyMode: items[0]?.json?.body?.mode || 'not set'\n    }\n  }\n}];"
+      },
+      "id": "detect-execution-mode",
+      "name": "Detect Execution Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "foi-source",
+              "name": "source",
+              "value": "FOI",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "prepare-foi-source",
+      "name": "Prepare FOI Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://josben.app.n8n.cloud/webhook/foi-reports",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-foi-reports",
+      "name": "Fetch FOI Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const foiResponse = $json;\nconst config = $node['Detect Execution Mode'].json;\n\nlet allReports = [];\n\ntry {\n  if (foiResponse.success && Array.isArray(foiResponse.reports)) {\n    allReports = foiResponse.reports.map(report => ({\n      source: 'FOI',\n      type: 'report',\n      title: report.title || `Rapport ${report.reportNo}`,\n      date: report.date,\n      url: report.url,\n      reportNo: report.reportNo,\n      excerpt: `${report.title || report.reportNo}`\n    }));\n  }\n} catch (e) {\n  console.error('Error parsing FOI reports:', e);\n}\n\nreturn allReports.length > 0 ? allReports.map(r => ({ json: r })) : [{ json: { source: 'FOI', type: 'report', isEmpty: true } }];"
+      },
+      "id": "parse-foi-results",
+      "name": "Parse FOI Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "carlheath-source",
+              "name": "source",
+              "value": "Carl Heath",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "prepare-carlheath-source",
+      "name": "Prepare Carl Heath Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://carlheath.se/",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-carlheath-blog",
+      "name": "Fetch Carl Heath Blog HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ \n  {\n    \"model\": \"claude-sonnet-4-20250514\",\n    \"max_tokens\": 2048,\n    \"messages\": [\n      {\n        \"role\": \"user\",\n        \"content\": `You are extracting blog posts from WordPress HTML from carlheath.se.\\n\\nFind ALL blog posts in this HTML and return ONLY a JSON array (no other text, no markdown code blocks).\\n\\nStructure:\\n[\\n  {\\n    \\\"title\\\": \\\"Post title\\\",\\n    \\\"date\\\": \\\"YYYY-MM-DD\\\",\\n    \\\"url\\\": \\\"full URL\\\",\\n    \\\"excerpt\\\": \\\"First 2-3 sentences from post\\\"\\n  }\\n]\\n\\nDate filter: Only include posts from ${$node['Detect Execution Mode'].json.dateFrom} to ${$node['Detect Execution Mode'].json.dateTo}.\\n\\nHTML to analyze:\\n${$json.data.substring(0, 100000)}`\n      }\n    ]\n  }\n}}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "ai-extract-carlheath",
+      "name": "AI Extract Carl Heath Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claudeResponse = $json;\nconst config = $node['Detect Execution Mode'].json;\n\ntry {\n  const aiText = claudeResponse.content[0].text.trim();\n  \n  let cleanText = aiText;\n  if (cleanText.startsWith('```')) {\n    cleanText = cleanText.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  \n  let posts;\n  try {\n    posts = JSON.parse(cleanText);\n  } catch (e) {\n    console.error('Parse error:', e.message);\n    posts = [];\n  }\n  \n  if (!Array.isArray(posts)) {\n    posts = [];\n  }\n  \n  return posts.map(post => ({\n    json: {\n      source: 'Carl Heath',\n      type: 'blog',\n      title: post.title,\n      date: post.date,\n      url: post.url,\n      excerpt: post.excerpt\n    }\n  }));\n  \n} catch (error) {\n  console.error('Extraction error:', error);\n  return [{\n    json: {\n      source: 'Carl Heath',\n      type: 'blog',\n      isEmpty: true,\n      error: error.message\n    }\n  }];\n}"
+      },
+      "id": "parse-carlheath-extraction",
+      "name": "Parse Carl Heath Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "oneuseful-source",
+              "name": "source",
+              "value": "One Useful Thing",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "prepare-oneuseful-source",
+      "name": "Prepare One Useful Thing Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "url": "https://www.oneusefulthing.org/",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-oneuseful-blog",
+      "name": "Fetch One Useful Thing HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 600]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ \n  {\n    \"model\": \"claude-sonnet-4-20250514\",\n    \"max_tokens\": 2048,\n    \"messages\": [\n      {\n        \"role\": \"user\",\n        \"content\": `You are extracting blog posts from Substack HTML from oneusefulthing.org.\\n\\nFind ALL blog posts in this HTML and return ONLY a JSON array (no other text, no markdown code blocks).\\n\\nStructure:\\n[\\n  {\\n    \\\"title\\\": \\\"Post title\\\",\\n    \\\"date\\\": \\\"YYYY-MM-DD\\\",\\n    \\\"url\\\": \\\"full URL\\\",\\n    \\\"excerpt\\\": \\\"First 2-3 sentences from post\\\"\\n  }\\n]\\n\\nDate filter: Only include posts from ${$node['Detect Execution Mode'].json.dateFrom} to ${$node['Detect Execution Mode'].json.dateTo}.\\n\\nHTML to analyze:\\n${$json.data.substring(0, 100000)}`\n      }\n    ]\n  }\n}}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "ai-extract-oneuseful",
+      "name": "AI Extract One Useful Thing Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1340, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claudeResponse = $json;\nconst config = $node['Detect Execution Mode'].json;\n\ntry {\n  const aiText = claudeResponse.content[0].text.trim();\n  \n  let cleanText = aiText;\n  if (cleanText.startsWith('```')) {\n    cleanText = cleanText.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  \n  let posts;\n  try {\n    posts = JSON.parse(cleanText);\n  } catch (e) {\n    console.error('Parse error:', e.message);\n    posts = [];\n  }\n  \n  if (!Array.isArray(posts)) {\n    posts = [];\n  }\n  \n  return posts.map(post => ({\n    json: {\n      source: 'One Useful Thing',\n      type: 'blog',\n      title: post.title,\n      date: post.date,\n      url: post.url,\n      excerpt: post.excerpt\n    }\n  }));\n  \n} catch (error) {\n  console.error('Extraction error:', error);\n  return [{\n    json: {\n      source: 'One Useful Thing',\n      type: 'blog',\n      isEmpty: true,\n      error: error.message\n    }\n  }];\n}"
+      },
+      "id": "parse-oneuseful-extraction",
+      "name": "Parse One Useful Thing Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 600]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-all-sources",
+      "name": "Merge All Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [1780, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\n\nconst response = {\n  success: true,\n  executionTime: new Date().toISOString(),\n  sources: {\n    foi: [],\n    carlHeath: [],\n    oneUsefulThing: []\n  },\n  totalItems: allItems.length\n};\n\nallItems.forEach(item => {\n  if (item.json.source === 'FOI' && !item.json.isEmpty) {\n    response.sources.foi.push(item.json);\n  } else if (item.json.source === 'Carl Heath' && !item.json.isEmpty) {\n    response.sources.carlHeath.push(item.json);\n  } else if (item.json.source === 'One Useful Thing' && !item.json.isEmpty) {\n    response.sources.oneUsefulThing.push(item.json);\n  }\n});\n\nreturn [{ json: response }];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate All Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aggregatedData = $json;\n\nlet contentSummary = `Datumintervall: ${$node['Detect Execution Mode'].json.dateFrom} till ${$node['Detect Execution Mode'].json.dateTo}\\n\\n`;\n\ncontentSummary += `FOI RAPPORTER (${aggregatedData.sources.foi.length} dokument):\\n`;\naggregatedData.sources.foi.forEach((item, i) => {\n  contentSummary += `${i+1}. ${item.title}\\n   Datum: ${item.date}\\n   URL: ${item.url}\\n\\n`;\n});\n\ncontentSummary += `\\nCARL HEATH BLOGG (${aggregatedData.sources.carlHeath.length} inlägg):\\n`;\naggregatedData.sources.carlHeath.forEach((item, i) => {\n  contentSummary += `${i+1}. ${item.title}\\n   Datum: ${item.date}\\n   URL: ${item.url}\\n   Utdrag: ${item.excerpt}\\n\\n`;\n});\n\ncontentSummary += `\\nONE USEFUL THING (${aggregatedData.sources.oneUsefulThing.length} inlägg):\\n`;\naggregatedData.sources.oneUsefulThing.forEach((item, i) => {\n  contentSummary += `${i+1}. ${item.title}\\n   Datum: ${item.date}\\n   URL: ${item.url}\\n   Utdrag: ${item.excerpt}\\n\\n`;\n});\n\nconst systemPrompt = `Du är en strategisk analytiker för Länsstyrelsen i Västra Götaland med expertis inom civilförsvar, krishantering och AI-teknologi.\n\nFokusområden:\n- Civilförsvar och totalförsvar\n- AI-säkerhet och robusthet\n- Krishantering och samhällsskydd\n- Desinformation och informationssäkerhet\n- Kritisk infrastruktur\n- Beredskap och resiliens\n\nReturnera ditt svar som ENBART ett JSON-objekt (ingen annan text) med följande struktur:\n{\n  \"executiveSummary\": \"Kort sammanfattning (3-5 meningar)\",\n  \"themes\": [\n    {\n      \"title\": \"Tema titel\",\n      \"insight\": \"Insikt om temat\",\n      \"relevanceForLansstyrelsen\": \"Varför detta är relevant\"\n    }\n  ],\n  \"keyQuotes\": [\n    {\n      \"quote\": \"Viktig citat från källorna\",\n      \"source\": \"Källa (FOI/Carl Heath/One Useful Thing)\",\n      \"context\": \"Kontext\"\n    }\n  ],\n  \"recommendations\": [\n    \"Åtgärd 1\",\n    \"Åtgärd 2\"\n  ]\n}`;\n\nconst userPrompt = `Analysera följande innehåll och generera insikter:\\n\\n${contentSummary}`;\n\nreturn [{\n  json: {\n    sourceData: aggregatedData,\n    claudeRequest: {\n      model: 'claude-sonnet-4-20250514',\n      max_tokens: 4096,\n      system: systemPrompt,\n      messages: [\n        {\n          role: 'user',\n          content: userPrompt\n        }\n      ]\n    }\n  }\n}];"
+      },
+      "id": "prepare-synthesis-request",
+      "name": "Prepare Synthesis Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeRequest }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "call-synthesis-ai",
+      "name": "Call Synthesis AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [2440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claudeResponse = $json;\nconst sourceData = $node['Prepare Synthesis Request'].json.sourceData;\n\ntry {\n  const aiText = claudeResponse.content[0].text.trim();\n  \n  let cleanText = aiText;\n  if (cleanText.startsWith('```')) {\n    cleanText = cleanText.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  \n  let insights;\n  try {\n    insights = JSON.parse(cleanText);\n  } catch (parseError) {\n    insights = {\n      executiveSummary: cleanText.substring(0, 500),\n      themes: [],\n      keyQuotes: [],\n      recommendations: []\n    };\n  }\n\n  return [{\n    json: {\n      success: true,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources,\n      aiInsights: insights,\n      metadata: {\n        model: 'claude-sonnet-4-20250514',\n        tokensUsed: claudeResponse.usage\n      }\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      success: false,\n      error: error.message,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources,\n      aiInsights: null\n    }\n  }];\n}"
+      },
+      "id": "parse-synthesis-response",
+      "name": "Parse Synthesis Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst insights = data.aiInsights;\nconst executionTime = new Date(data.executionTime);\n\nconst dateStr = executionTime.toLocaleDateString('sv-SE', { \n  weekday: 'long', \n  year: 'numeric', \n  month: 'long', \n  day: 'numeric' \n});\n\nconst html = `\n<!DOCTYPE html>\n<html lang=\"sv\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Veckorapport - Civilförsvar & AI Insikter</title>\n  <style>\n    body {\n      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;\n      line-height: 1.6;\n      color: #333;\n      max-width: 800px;\n      margin: 0 auto;\n      padding: 20px;\n      background-color: #f5f5f5;\n    }\n    .container {\n      background-color: white;\n      border-radius: 8px;\n      box-shadow: 0 2px 4px rgba(0,0,0,0.1);\n      overflow: hidden;\n    }\n    .header {\n      background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);\n      color: white;\n      padding: 30px;\n      text-align: center;\n    }\n    .header h1 {\n      margin: 0;\n      font-size: 28px;\n      font-weight: 600;\n    }\n    .header p {\n      margin: 10px 0 0 0;\n      opacity: 0.9;\n      font-size: 14px;\n    }\n    .content {\n      padding: 30px;\n    }\n    .section {\n      margin-bottom: 30px;\n    }\n    .section-title {\n      color: #1e3a8a;\n      font-size: 20px;\n      font-weight: 600;\n      margin-bottom: 15px;\n      padding-bottom: 8px;\n      border-bottom: 2px solid #3b82f6;\n    }\n    .executive-summary {\n      background-color: #eff6ff;\n      border-left: 4px solid #3b82f6;\n      padding: 20px;\n      margin-bottom: 25px;\n      border-radius: 4px;\n    }\n    .theme {\n      background-color: #f9fafb;\n      border-radius: 6px;\n      padding: 20px;\n      margin-bottom: 15px;\n      border-left: 3px solid #10b981;\n    }\n    .theme-title {\n      color: #059669;\n      font-size: 18px;\n      font-weight: 600;\n      margin-bottom: 10px;\n    }\n    .theme-insight {\n      margin-bottom: 10px;\n    }\n    .theme-relevance {\n      font-style: italic;\n      color: #666;\n      font-size: 14px;\n      margin-top: 10px;\n      padding-top: 10px;\n      border-top: 1px dashed #d1d5db;\n    }\n    .quote {\n      background-color: #fef3c7;\n      border-left: 3px solid #f59e0b;\n      padding: 15px;\n      margin-bottom: 15px;\n      border-radius: 4px;\n    }\n    .quote-text {\n      font-style: italic;\n      margin-bottom: 8px;\n    }\n    .quote-source {\n      font-weight: 600;\n      color: #d97706;\n      font-size: 14px;\n    }\n    .quote-context {\n      color: #666;\n      font-size: 13px;\n      margin-top: 5px;\n    }\n    .recommendations {\n      background-color: #f0fdf4;\n      border-radius: 6px;\n      padding: 20px;\n    }\n    .recommendations ul {\n      margin: 10px 0;\n      padding-left: 25px;\n    }\n    .recommendations li {\n      margin-bottom: 10px;\n      color: #166534;\n    }\n    .footer {\n      background-color: #f9fafb;\n      padding: 20px 30px;\n      text-align: center;\n      font-size: 13px;\n      color: #666;\n      border-top: 1px solid #e5e7eb;\n    }\n    .metadata {\n      display: inline-block;\n      background-color: #e5e7eb;\n      padding: 5px 10px;\n      border-radius: 4px;\n      margin: 5px;\n      font-size: 12px;\n    }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h1>📋 Veckorapport: Civilförsvar & AI</h1>\n      <p>Insikter från FOI, Carl Heath och One Useful Thing</p>\n      <p>${dateStr}</p>\n    </div>\n    \n    <div class=\"content\">\n      ${data.success ? `\n        <div class=\"executive-summary\">\n          <strong style=\"color: #1e3a8a;\">Sammanfattning</strong>\n          <p style=\"margin: 10px 0 0 0;\">${insights.executiveSummary || 'Ingen sammanfattning tillgänglig.'}</p>\n        </div>\n        \n        ${insights.themes && insights.themes.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">🎯 Huvudteman</h2>\n            ${insights.themes.map(theme => `\n              <div class=\"theme\">\n                <div class=\"theme-title\">${theme.title}</div>\n                <div class=\"theme-insight\">${theme.insight}</div>\n                ${theme.relevanceForLansstyrelsen ? `\n                  <div class=\"theme-relevance\">\n                    <strong>Relevans:</strong> ${theme.relevanceForLansstyrelsen}\n                  </div>\n                ` : ''}\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        ${insights.keyQuotes && insights.keyQuotes.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">💬 Viktiga Citat</h2>\n            ${insights.keyQuotes.map(quote => `\n              <div class=\"quote\">\n                <div class=\"quote-text\">\"${quote.quote}\"</div>\n                <div class=\"quote-source\">— ${quote.source}</div>\n                ${quote.context ? `<div class=\"quote-context\">${quote.context}</div>` : ''}\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        ${insights.recommendations && insights.recommendations.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">✅ Rekommendationer</h2>\n            <div class=\"recommendations\">\n              <ul>\n                ${insights.recommendations.map(rec => `<li>${rec}</li>`).join('')}\n              </ul>\n            </div>\n          </div>\n        ` : ''}\n      ` : `\n        <div style=\"padding: 20px; background: #fee; border: 1px solid #f44; color: #a00;\">\n          <strong>⚠️ Fel vid generering</strong>\n          <p>${data.error || 'Ett okänt fel uppstod.'}</p>\n        </div>\n      `}\n    </div>\n    \n    <div class=\"footer\">\n      <p>\n        <span class=\"metadata\">📊 Modell: ${data.metadata?.model || 'N/A'}</span>\n        <span class=\"metadata\">⏱️ Genererad: ${dateStr}</span>\n      </p>\n      <p style=\"margin-top: 15px; font-size: 12px;\">\n        🤖 Genererad av Länsstyrelsens AI Insights System\n      </p>\n    </div>\n  </div>\n</body>\n</html>\n`;\n\nconst modeData = $node['Detect Execution Mode'].json;\n\nreturn [{\n  json: {\n    ...data,\n    emailHtml: html,\n    emailSubject: `Veckorapport Civilförsvar & AI - ${dateStr}`,\n    emailReady: true,\n    shouldSendEmail: modeData.shouldSendEmail,\n    testMode: modeData.testMode\n  }\n}];"
+      },
+      "id": "generate-email",
+      "name": "Generate HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "testmode-check",
+              "leftValue": "={{ $json.shouldSendEmail }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-send-email",
+      "name": "Should Send Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3100, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "return-json-response",
+      "name": "Return JSON Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [3320, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "josef.bengtson@lansstyrelsen.se",
+        "subject": "={{ $json.emailSubject }}",
+        "message": "={{ $json.emailHtml }}",
+        "options": {}
+      },
+      "id": "send-weekly-email",
+      "name": "Send Weekly Report Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [3320, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Merge Triggers", "type": "main", "index": 0}]]
+    },
+    "Schedule Trigger (Monday 8 AM)": {
+      "main": [[{"node": "Merge Triggers", "type": "main", "index": 1}]]
+    },
+    "Merge Triggers": {
+      "main": [[{"node": "Detect Execution Mode", "type": "main", "index": 0}]]
+    },
+    "Detect Execution Mode": {
+      "main": [[
+        {"node": "Prepare FOI Source", "type": "main", "index": 0},
+        {"node": "Prepare Carl Heath Source", "type": "main", "index": 0},
+        {"node": "Prepare One Useful Thing Source", "type": "main", "index": 0}
+      ]]
+    },
+    "Prepare FOI Source": {
+      "main": [[{"node": "Fetch FOI Reports", "type": "main", "index": 0}]]
+    },
+    "Fetch FOI Reports": {
+      "main": [[{"node": "Parse FOI Results", "type": "main", "index": 0}]]
+    },
+    "Parse FOI Results": {
+      "main": [[{"node": "Merge All Sources", "type": "main", "index": 0}]]
+    },
+    "Prepare Carl Heath Source": {
+      "main": [[{"node": "Fetch Carl Heath Blog HTML", "type": "main", "index": 0}]]
+    },
+    "Fetch Carl Heath Blog HTML": {
+      "main": [[{"node": "AI Extract Carl Heath Posts", "type": "main", "index": 0}]]
+    },
+    "AI Extract Carl Heath Posts": {
+      "main": [[{"node": "Parse Carl Heath Extraction", "type": "main", "index": 0}]]
+    },
+    "Parse Carl Heath Extraction": {
+      "main": [[{"node": "Merge All Sources", "type": "main", "index": 1}]]
+    },
+    "Prepare One Useful Thing Source": {
+      "main": [[{"node": "Fetch One Useful Thing HTML", "type": "main", "index": 0}]]
+    },
+    "Fetch One Useful Thing HTML": {
+      "main": [[{"node": "AI Extract One Useful Thing Posts", "type": "main", "index": 0}]]
+    },
+    "AI Extract One Useful Thing Posts": {
+      "main": [[{"node": "Parse One Useful Thing Extraction", "type": "main", "index": 0}]]
+    },
+    "Parse One Useful Thing Extraction": {
+      "main": [[{"node": "Merge All Sources", "type": "main", "index": 2}]]
+    },
+    "Merge All Sources": {
+      "main": [[{"node": "Aggregate All Results", "type": "main", "index": 0}]]
+    },
+    "Aggregate All Results": {
+      "main": [[{"node": "Prepare Synthesis Request", "type": "main", "index": 0}]]
+    },
+    "Prepare Synthesis Request": {
+      "main": [[{"node": "Call Synthesis AI", "type": "main", "index": 0}]]
+    },
+    "Call Synthesis AI": {
+      "main": [[{"node": "Parse Synthesis Response", "type": "main", "index": 0}]]
+    },
+    "Parse Synthesis Response": {
+      "main": [[{"node": "Generate HTML Email", "type": "main", "index": 0}]]
+    },
+    "Generate HTML Email": {
+      "main": [[{"node": "Should Send Email?", "type": "main", "index": 0}]]
+    },
+    "Should Send Email?": {
+      "main": [
+        [{"node": "Send Weekly Report Email", "type": "main", "index": 0}],
+        [{"node": "Return JSON Response", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

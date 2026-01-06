@@ -1,0 +1,37 @@
+{
+  "name": "Myndighetsbevakning - Category 3 (International) [PLACEHOLDER]",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "category-3-international",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "category-3-international"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\n\nreturn [{\n  json: {\n    success: true,\n    category: 'International',\n    items: [],\n    totalItems: 0,\n    executionTime: new Date().toISOString(),\n    dateFrom: body.dateFrom || new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0],\n    dateTo: body.dateTo || new Date().toISOString().split('T')[0],\n    note: 'PLACEHOLDER - Category 3 kommer implementeras i Fas 3',\n    sources: {}\n  }\n}];"
+      },
+      "id": "return-placeholder",
+      "name": "Return Placeholder Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Return Placeholder Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

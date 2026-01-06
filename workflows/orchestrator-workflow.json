@@ -1,0 +1,117 @@
+{
+  "name": "Myndighetsbevakning - Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orchestrator",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger (Test)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "orchestrator"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger (Monday 8 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [240, 500]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "read-curated",
+      "name": "Read Curated Articles",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get curated articles from Google Sheets (passed as input)\nconst curatedInput = $input.all();\nconst curatedArticles = [];\n\nconst now = new Date();\nconst sevenDaysAgo = new Date(now);\nsevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\nconst dateFrom = sevenDaysAgo.toISOString().split('T')[0];\nconst dateTo = now.toISOString().split('T')[0];\n\n// Filter curated articles from last 7 days with source='Myndighetsbevakning'\nfor (const item of curatedInput) {\n  const data = item.json;\n  if (data.source === 'Myndighetsbevakning' && data.date_added >= dateFrom) {\n    curatedArticles.push({\n      title: data.title || '',\n      url: data.url || '',\n      source: 'Curated',\n      category: data.category || 'Manuellt',\n      date: data.date_added || dateTo,\n      excerpt: data.title || '',\n      type: 'curated'\n    });\n  }\n}\n\nconst executionTime = now.toISOString();\nconst config = { dateFrom, dateTo };\n\nconst categories = {\n  sektorsansvariga: [],\n  regeringen: [],\n  international: [],\n  curated: curatedArticles\n};\n\nconst metadata = {\n  category1Success: false,\n  category2Success: false,\n  category3Success: false,\n  curatedCount: curatedArticles.length\n};\n\nlet totalItems = curatedArticles.length;\n\n// Fetch Category 1\ntry {\n  const cat1 = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://josben.app.n8n.cloud/webhook/category-1-mini',\n    body: config,\n    headers: { 'Content-Type': 'application/json' },\n    timeout: 180000,\n    json: true\n  });\n  if (cat1 && cat1.success && Array.isArray(cat1.items)) {\n    categories.sektorsansvariga = cat1.items;\n    totalItems += cat1.items.length;\n    metadata.category1Success = true;\n  }\n} catch(e) { console.error('Category 1 error:', e.message); }\n\n// Fetch Category 2\ntry {\n  const cat2 = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://josben.app.n8n.cloud/webhook/category-2-regeringen',\n    body: config,\n    headers: { 'Content-Type': 'application/json' },\n    timeout: 180000,\n    json: true\n  });\n  if (cat2 && cat2.success && Array.isArray(cat2.items)) {\n    categories.regeringen = cat2.items;\n    totalItems += cat2.items.length;\n    metadata.category2Success = true;\n  }\n} catch(e) { console.error('Category 2 error:', e.message); }\n\n// Fetch Category 3\ntry {\n  const cat3 = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://josben.app.n8n.cloud/webhook/category-3-international',\n    body: config,\n    headers: { 'Content-Type': 'application/json' },\n    timeout: 180000,\n    json: true\n  });\n  if (cat3 && cat3.success && Array.isArray(cat3.items)) {\n    categories.international = cat3.items;\n    totalItems += cat3.items.length;\n    metadata.category3Success = true;\n  }\n} catch(e) { console.error('Category 3 error:', e.message); }\n\nreturn [{\n  json: {\n    success: true,\n    executionTime,\n    dateFrom,\n    dateTo,\n    categories,\n    totalItems,\n    metadata\n  }\n}];"
+      },
+      "id": "fetch-all-categories",
+      "name": "Fetch All Categories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://josben.app.n8n.cloud/webhook/synthesis-two-stage",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "trigger-synthesis",
+      "name": "Trigger Synthesis & Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger (Test)": {
+      "main": [[{"node": "Read Curated Articles", "type": "main", "index": 0}]]
+    },
+    "Schedule Trigger (Monday 8 AM)": {
+      "main": [[{"node": "Read Curated Articles", "type": "main", "index": 0}]]
+    },
+    "Read Curated Articles": {
+      "main": [[{"node": "Fetch All Categories", "type": "main", "index": 0}]]
+    },
+    "Fetch All Categories": {
+      "main": [[{"node": "Trigger Synthesis & Email", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

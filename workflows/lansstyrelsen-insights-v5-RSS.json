@@ -1,0 +1,343 @@
+{
+  "name": "Länsstyrelsen AI Insights - v5 RSS FEEDS",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lansstyrelsen-insights",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "lansstyrelsen-insights"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger (Monday 8 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [240, 500]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-triggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst isWebhook = items.some(item => item.json.headers !== undefined);\nconst mode = isWebhook ? 'webhook' : 'scheduled';\n\nlet dateFrom, dateTo;\n\nif (isWebhook && items[0].json.body) {\n  const body = items[0].json.body;\n  dateFrom = body.dateFrom;\n  dateTo = body.dateTo;\n}\n\nif (!dateFrom || !dateTo) {\n  const now = new Date();\n  const sevenDaysAgo = new Date(now);\n  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n  \n  dateFrom = sevenDaysAgo.toISOString().split('T')[0];\n  dateTo = now.toISOString().split('T')[0];\n}\n\nconst testMode = isWebhook && items[0].json.body && items[0].json.body.mode === 'test';\nconst shouldSendEmail = !testMode;\n\nreturn [{\n  json: {\n    mode,\n    testMode,\n    shouldSendEmail,\n    dateFrom,\n    dateTo,\n    executionTime: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "detect-execution-mode",
+      "name": "Detect Execution Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "foi-source",
+              "name": "source",
+              "value": "FOI",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true
+      },
+      "id": "prepare-foi-source",
+      "name": "Prepare FOI Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://josben.app.n8n.cloud/webhook/foi-reports",
+        "method": "POST",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-foi-reports",
+      "name": "Fetch FOI Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const foiResponse = $json;\n\nlet allReports = [];\n\ntry {\n  if (foiResponse.success && Array.isArray(foiResponse.reports)) {\n    allReports = foiResponse.reports.slice(0, 10).map(report => ({\n      source: 'FOI',\n      type: 'report',\n      title: report.title || `Rapport ${report.reportNo}`,\n      date: report.date,\n      url: report.url,\n      excerpt: report.title || report.reportNo\n    }));\n  }\n} catch (e) {\n  console.error('Error parsing FOI:', e);\n}\n\nreturn allReports.length > 0 ? allReports.map(r => ({ json: r })) : [{ json: { source: 'FOI', isEmpty: true } }];"
+      },
+      "id": "parse-foi-results",
+      "name": "Parse FOI Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://carlheath.se/feed/",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-carlheath-rss",
+      "name": "Fetch Carl Heath RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rssXml = $json.data;\nconst config = $node['Detect Execution Mode'].json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst posts = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch && pubDateMatch) {\n      const pubDate = new Date(pubDateMatch[1]);\n      \n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').substring(0, 300);\n        \n        posts.push({\n          source: 'Carl Heath',\n          type: 'blog',\n          title: titleMatch[1],\n          url: linkMatch[1],\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('RSS parse error:', e);\n}\n\nreturn posts.length > 0 ? posts.map(p => ({ json: p })) : [{ json: { source: 'Carl Heath', isEmpty: true } }];"
+      },
+      "id": "parse-carlheath-rss",
+      "name": "Parse Carl Heath RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://www.oneusefulthing.org/feed",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-oneuseful-rss",
+      "name": "Fetch One Useful Thing RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rssXml = $json.data;\nconst config = $node['Detect Execution Mode'].json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst posts = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch && pubDateMatch) {\n      const pubDate = new Date(pubDateMatch[1]);\n      \n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').substring(0, 300);\n        \n        posts.push({\n          source: 'One Useful Thing',\n          type: 'blog',\n          title: titleMatch[1],\n          url: linkMatch[1],\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('RSS parse error:', e);\n}\n\nreturn posts.length > 0 ? posts.map(p => ({ json: p })) : [{ json: { source: 'One Useful Thing', isEmpty: true } }];"
+      },
+      "id": "parse-oneuseful-rss",
+      "name": "Parse One Useful Thing RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 600]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-all-sources",
+      "name": "Merge All Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\n\nconst response = {\n  success: true,\n  executionTime: new Date().toISOString(),\n  sources: {\n    foi: [],\n    carlHeath: [],\n    oneUsefulThing: []\n  },\n  totalItems: 0\n};\n\nallItems.forEach(item => {\n  if (item.json.isEmpty) return;\n  \n  if (item.json.source === 'FOI') {\n    response.sources.foi.push(item.json);\n  } else if (item.json.source === 'Carl Heath') {\n    response.sources.carlHeath.push(item.json);\n  } else if (item.json.source === 'One Useful Thing') {\n    response.sources.oneUsefulThing.push(item.json);\n  }\n});\n\nresponse.totalItems = response.sources.foi.length + response.sources.carlHeath.length + response.sources.oneUsefulThing.length;\n\nreturn [{ json: response }];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate All Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aggregatedData = $json;\nconst config = $node['Detect Execution Mode'].json;\n\nlet contentSummary = `Datumintervall: ${config.dateFrom} till ${config.dateTo}\\n\\n`;\n\ncontentSummary += `FOI RAPPORTER (${aggregatedData.sources.foi.length} dokument):\\n`;\naggregatedData.sources.foi.forEach((item, i) => {\n  contentSummary += `${i+1}. ${item.title}\\n   Datum: ${item.date}\\n   URL: ${item.url}\\n\\n`;\n});\n\ncontentSummary += `\\nCARL HEATH BLOGG (${aggregatedData.sources.carlHeath.length} inlägg):\\n`;\naggregatedData.sources.carlHeath.forEach((item, i) => {\n  contentSummary += `${i+1}. ${item.title}\\n   Datum: ${item.date}\\n   URL: ${item.url}\\n   Utdrag: ${item.excerpt}\\n\\n`;\n});\n\ncontentSummary += `\\nONE USEFUL THING (${aggregatedData.sources.oneUsefulThing.length} inlägg):\\n`;\naggregatedData.sources.oneUsefulThing.forEach((item, i) => {\n  contentSummary += `${i+1}. ${item.title}\\n   Datum: ${item.date}\\n   URL: ${item.url}\\n   Utdrag: ${item.excerpt}\\n\\n`;\n});\n\nconst systemPrompt = `Du är en strategisk analytiker för Länsstyrelsen i Västra Götaland med expertis inom civilförsvar, krishantering och AI-teknologi.\n\nFokusområden:\n- Civilförsvar och totalförsvar\n- AI-säkerhet och robusthet\n- Krishantering och samhällsskydd\n- Desinformation och informationssäkerhet\n- Kritisk infrastruktur\n- Beredskap och resiliens\n\nReturnera ditt svar som ENBART ett JSON-objekt (ingen annan text) med följande struktur:\n{\n  \"executiveSummary\": \"Kort sammanfattning (3-5 meningar)\",\n  \"themes\": [\n    {\n      \"title\": \"Tema titel\",\n      \"insight\": \"Insikt om temat\",\n      \"relevanceForLansstyrelsen\": \"Varför detta är relevant\"\n    }\n  ],\n  \"keyQuotes\": [\n    {\n      \"quote\": \"Viktig citat från utdragen\",\n      \"source\": \"Källa (FOI/Carl Heath/One Useful Thing)\",\n      \"context\": \"Kontext\"\n    }\n  ],\n  \"recommendations\": [\n    \"Åtgärd 1\",\n    \"Åtgärd 2\"\n  ]\n}`;\n\nconst userPrompt = `Analysera följande innehåll och generera insikter:\\n\\n${contentSummary}`;\n\nreturn [{\n  json: {\n    sourceData: aggregatedData,\n    claudeRequest: {\n      model: 'claude-sonnet-4-20250514',\n      max_tokens: 4096,\n      system: systemPrompt,\n      messages: [\n        {\n          role: 'user',\n          content: userPrompt\n        }\n      ]\n    }\n  }\n}];"
+      },
+      "id": "prepare-synthesis",
+      "name": "Prepare Synthesis Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeRequest }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "call-synthesis-ai",
+      "name": "Call Synthesis AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claudeResponse = $json;\nconst sourceData = $node['Prepare Synthesis Request'].json.sourceData;\n\ntry {\n  const aiText = claudeResponse.content[0].text.trim();\n  \n  let cleanText = aiText;\n  if (cleanText.startsWith('```')) {\n    cleanText = cleanText.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  \n  let insights;\n  try {\n    insights = JSON.parse(cleanText);\n  } catch (parseError) {\n    insights = {\n      executiveSummary: cleanText.substring(0, 500),\n      themes: [],\n      keyQuotes: [],\n      recommendations: []\n    };\n  }\n\n  return [{\n    json: {\n      success: true,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources,\n      aiInsights: insights,\n      metadata: {\n        model: 'claude-sonnet-4-20250514',\n        tokensUsed: claudeResponse.usage\n      }\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      success: false,\n      error: error.message,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources\n    }\n  }];\n}"
+      },
+      "id": "parse-synthesis",
+      "name": "Parse Synthesis Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst insights = data.aiInsights;\nconst executionTime = new Date(data.executionTime);\n\nconst dateStr = executionTime.toLocaleDateString('sv-SE', { \n  weekday: 'long', \n  year: 'numeric', \n  month: 'long', \n  day: 'numeric' \n});\n\nconst html = `\n<!DOCTYPE html>\n<html lang=\"sv\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Veckorapport - Civilförsvar & AI</title>\n  <style>\n    body { font-family: 'Segoe UI', sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }\n    .container { background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }\n    .header { background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); color: white; padding: 30px; text-align: center; }\n    .header h1 { margin: 0; font-size: 28px; font-weight: 600; }\n    .header p { margin: 10px 0 0 0; opacity: 0.9; font-size: 14px; }\n    .content { padding: 30px; }\n    .executive-summary { background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 20px; margin-bottom: 25px; border-radius: 4px; }\n    .section { margin-bottom: 30px; }\n    .section-title { color: #1e3a8a; font-size: 20px; font-weight: 600; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #3b82f6; }\n    .theme { background-color: #f9fafb; border-radius: 6px; padding: 20px; margin-bottom: 15px; border-left: 3px solid #10b981; }\n    .theme-title { color: #059669; font-size: 18px; font-weight: 600; margin-bottom: 10px; }\n    .theme-relevance { font-style: italic; color: #666; font-size: 14px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #d1d5db; }\n    .quote { background-color: #fef3c7; border-left: 3px solid #f59e0b; padding: 15px; margin-bottom: 15px; border-radius: 4px; }\n    .quote-text { font-style: italic; margin-bottom: 8px; }\n    .quote-source { font-weight: 600; color: #d97706; font-size: 14px; }\n    .recommendations { background-color: #f0fdf4; border-radius: 6px; padding: 20px; }\n    .recommendations ul { margin: 10px 0; padding-left: 25px; }\n    .recommendations li { margin-bottom: 10px; color: #166534; }\n    .footer { background-color: #f9fafb; padding: 20px 30px; text-align: center; font-size: 13px; color: #666; border-top: 1px solid #e5e7eb; }\n    .metadata { display: inline-block; background-color: #e5e7eb; padding: 5px 10px; border-radius: 4px; margin: 5px; font-size: 12px; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h1>📋 Veckorapport: Civilförsvar & AI</h1>\n      <p>Insikter från FOI, Carl Heath och One Useful Thing</p>\n      <p>${dateStr}</p>\n    </div>\n    \n    <div class=\"content\">\n      ${data.success ? `\n        <div class=\"executive-summary\">\n          <strong style=\"color: #1e3a8a;\">Sammanfattning</strong>\n          <p style=\"margin: 10px 0 0 0;\">${insights.executiveSummary || 'Ingen sammanfattning.'}</p>\n        </div>\n        \n        ${insights.themes?.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">🎯 Huvudteman</h2>\n            ${insights.themes.map(theme => `\n              <div class=\"theme\">\n                <div class=\"theme-title\">${theme.title}</div>\n                <div>${theme.insight}</div>\n                ${theme.relevanceForLansstyrelsen ? `<div class=\"theme-relevance\"><strong>Relevans:</strong> ${theme.relevanceForLansstyrelsen}</div>` : ''}\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        ${insights.keyQuotes?.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">💬 Viktiga Citat</h2>\n            ${insights.keyQuotes.map(quote => `\n              <div class=\"quote\">\n                <div class=\"quote-text\">\"${quote.quote}\"</div>\n                <div class=\"quote-source\">— ${quote.source}</div>\n                ${quote.context ? `<div style=\"color: #666; font-size: 13px; margin-top: 5px;\">${quote.context}</div>` : ''}\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        ${insights.recommendations?.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">✅ Rekommendationer</h2>\n            <div class=\"recommendations\">\n              <ul>\n                ${insights.recommendations.map(rec => `<li>${rec}</li>`).join('')}\n              </ul>\n            </div>\n          </div>\n        ` : ''}\n      ` : `<div style=\"padding: 20px; background: #fee; color: #a00;\"><strong>Fel:</strong> ${data.error}</div>`}\n    </div>\n    \n    <div class=\"footer\">\n      <p>\n        <span class=\"metadata\">📊 ${data.metadata?.model || 'N/A'}</span>\n        <span class=\"metadata\">⏱️ ${dateStr}</span>\n      </p>\n      <p style=\"margin-top: 15px; font-size: 12px;\">🤖 Genererad av Länsstyrelsens AI Insights System</p>\n    </div>\n  </div>\n</body>\n</html>\n`;\n\nconst modeData = $node['Detect Execution Mode'].json;\n\nreturn [{\n  json: {\n    ...data,\n    emailHtml: html,\n    emailSubject: `Veckorapport Civilförsvar & AI - ${dateStr}`,\n    shouldSendEmail: modeData.shouldSendEmail\n  }\n}];"
+      },
+      "id": "generate-email",
+      "name": "Generate HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "leftValue": "={{ $json.shouldSendEmail }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-send-email",
+      "name": "Should Send Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2880, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "return-json",
+      "name": "Return JSON Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [3100, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "josef.bengtson@lansstyrelsen.se",
+        "subject": "={{ $json.emailSubject }}",
+        "message": "={{ $json.emailHtml }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Weekly Report Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [3100, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Merge Triggers", "type": "main", "index": 0}]]
+    },
+    "Schedule Trigger (Monday 8 AM)": {
+      "main": [[{"node": "Merge Triggers", "type": "main", "index": 1}]]
+    },
+    "Merge Triggers": {
+      "main": [[{"node": "Detect Execution Mode", "type": "main", "index": 0}]]
+    },
+    "Detect Execution Mode": {
+      "main": [[
+        {"node": "Prepare FOI Source", "type": "main", "index": 0},
+        {"node": "Fetch Carl Heath RSS", "type": "main", "index": 0},
+        {"node": "Fetch One Useful Thing RSS", "type": "main", "index": 0}
+      ]]
+    },
+    "Prepare FOI Source": {
+      "main": [[{"node": "Fetch FOI Reports", "type": "main", "index": 0}]]
+    },
+    "Fetch FOI Reports": {
+      "main": [[{"node": "Parse FOI Results", "type": "main", "index": 0}]]
+    },
+    "Parse FOI Results": {
+      "main": [[{"node": "Merge All Sources", "type": "main", "index": 0}]]
+    },
+    "Fetch Carl Heath RSS": {
+      "main": [[{"node": "Parse Carl Heath RSS", "type": "main", "index": 0}]]
+    },
+    "Parse Carl Heath RSS": {
+      "main": [[{"node": "Merge All Sources", "type": "main", "index": 1}]]
+    },
+    "Fetch One Useful Thing RSS": {
+      "main": [[{"node": "Parse One Useful Thing RSS", "type": "main", "index": 0}]]
+    },
+    "Parse One Useful Thing RSS": {
+      "main": [[{"node": "Merge All Sources", "type": "main", "index": 2}]]
+    },
+    "Merge All Sources": {
+      "main": [[{"node": "Aggregate All Results", "type": "main", "index": 0}]]
+    },
+    "Aggregate All Results": {
+      "main": [[{"node": "Prepare Synthesis Request", "type": "main", "index": 0}]]
+    },
+    "Prepare Synthesis Request": {
+      "main": [[{"node": "Call Synthesis AI", "type": "main", "index": 0}]]
+    },
+    "Call Synthesis AI": {
+      "main": [[{"node": "Parse Synthesis Response", "type": "main", "index": 0}]]
+    },
+    "Parse Synthesis Response": {
+      "main": [[{"node": "Generate HTML Email", "type": "main", "index": 0}]]
+    },
+    "Generate HTML Email": {
+      "main": [[{"node": "Should Send Email?", "type": "main", "index": 0}]]
+    },
+    "Should Send Email?": {
+      "main": [
+        [{"node": "Send Weekly Report Email", "type": "main", "index": 0}],
+        [{"node": "Return JSON Response", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,487 @@
+{
+  "name": "Länsstyrelsen AI Insights - Weekly Civil Defense Report",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lansstyrelsen-insights",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "lansstyrelsen-insights"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger (Monday 8 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [240, 500]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-triggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Detect execution mode and create date filter\nconst items = $input.all();\n\n// Check if this is a webhook call or scheduled\nconst isWebhook = items.some(item => item.json.headers !== undefined);\nconst mode = isWebhook ? 'webhook' : 'scheduled';\n\n// Get date range from webhook body or calculate from today\nlet dateFrom, dateTo;\n\nif (isWebhook && items[0].json.body) {\n  const body = items[0].json.body;\n  dateFrom = body.dateFrom;\n  dateTo = body.dateTo;\n}\n\n// If no dates provided, calculate last 7 days\nif (!dateFrom || !dateTo) {\n  const now = new Date();\n  const sevenDaysAgo = new Date(now);\n  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n  \n  dateFrom = sevenDaysAgo.toISOString().split('T')[0];\n  dateTo = now.toISOString().split('T')[0];\n}\n\n// Check for test mode (prevents email sending)\nconst testMode = isWebhook && items[0].json.body && items[0].json.body.mode === 'test';\n\nreturn [{\n  json: {\n    mode,\n    testMode,\n    dateFrom,\n    dateTo,\n    executionTime: new Date().toISOString(),\n    debug: {\n      isWebhook,\n      itemCount: items.length\n    }\n  }\n}];"
+      },
+      "id": "detect-execution-mode",
+      "name": "Detect Execution Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "foi-source",
+              "name": "source",
+              "value": "FOI",
+              "type": "string"
+            },
+            {
+              "id": "foi-type",
+              "name": "type",
+              "value": "report",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "dotNotation": false
+        }
+      },
+      "id": "prepare-foi-source",
+      "name": "Prepare FOI Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 250]
+    },
+    {
+      "parameters": {
+        "url": "https://josben.app.n8n.cloud/webhook/foi-reports",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-foi-reports",
+      "name": "Fetch FOI Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 250]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse FOI results and filter by date\nconst foiResponse = $json;\nconst config = $node['Detect Execution Mode'].json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\n\nlet filteredReports = [];\n\ntry {\n  if (foiResponse.success && Array.isArray(foiResponse.reports)) {\n    filteredReports = foiResponse.reports.filter(report => {\n      const reportDate = new Date(report.date);\n      return reportDate >= dateFrom && reportDate <= dateTo;\n    }).map(report => ({\n      source: 'FOI',\n      type: 'report',\n      title: report.title,\n      date: report.date,\n      url: report.url,\n      reportNo: report.reportNo,\n      excerpt: `FOI rapport ${report.reportNo}`,\n      needsFullContent: true\n    }));\n  }\n} catch (e) {\n  console.error('Error filtering FOI reports:', e);\n}\n\nreturn filteredReports.map(r => ({ json: r }));"
+      },
+      "id": "parse-foi-results",
+      "name": "Parse FOI Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 250]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "carlheath-source",
+              "name": "source",
+              "value": "Carl Heath",
+              "type": "string"
+            },
+            {
+              "id": "carlheath-type",
+              "name": "type",
+              "value": "blog",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "dotNotation": false
+        }
+      },
+      "id": "prepare-carlheath-source",
+      "name": "Prepare Carl Heath Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://carlheath.se/",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-carlheath-blog",
+      "name": "Fetch Carl Heath Blog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "oneuseful-source",
+              "name": "source",
+              "value": "One Useful Thing",
+              "type": "string"
+            },
+            {
+              "id": "oneuseful-type",
+              "name": "type",
+              "value": "blog",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {
+          "dotNotation": false
+        }
+      },
+      "id": "prepare-oneuseful-source",
+      "name": "Prepare One Useful Thing Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 550]
+    },
+    {
+      "parameters": {
+        "url": "https://www.oneusefulthing.org/",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-oneuseful-blog",
+      "name": "Fetch One Useful Thing Blog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 550]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-all-sources",
+      "name": "Merge All Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all items into a single response\nconst allItems = $input.all();\n\nconst response = {\n  success: true,\n  executionTime: new Date().toISOString(),\n  sources: {\n    foi: [],\n    carlHeath: [],\n    oneUsefulThing: []\n  },\n  totalItems: allItems.length,\n  message: 'Data collection complete - ready for AI synthesis'\n};\n\n// Group items by source\nallItems.forEach(item => {\n  if (item.json.source === 'FOI') {\n    response.sources.foi.push(item.json);\n  } else if (item.json.source === 'Carl Heath') {\n    response.sources.carlHeath.push(item.json);\n  } else if (item.json.source === 'One Useful Thing') {\n    response.sources.oneUsefulThing.push(item.json);\n  }\n});\n\nreturn [{ json: response }];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results (MVP)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// AI Synthesis using Claude API\nconst aggregatedData = $json;\nconst CLAUDE_API_KEY = 'YOUR_ANTHROPIC_API_KEY';\n\n// Prepare content summary for Claude\nconst contentSummary = `\nFOI Reports (${aggregatedData.sources.foi.length} items):\n${aggregatedData.sources.foi.map(item => `- ${item.title || item.reportNo}: ${item.date}`).join('\\n')}\n\nCarl Heath Blog:\n- HTML content fetched (${aggregatedData.sources.carlHeath.length > 0 ? 'available' : 'not available'})\n\nOne Useful Thing Blog:\n- HTML content fetched (${aggregatedData.sources.oneUsefulThing.length > 0 ? 'available' : 'not available'})\n`;\n\nconst systemPrompt = `Du är en strategisk analytiker för Länsstyrelsen i Västra Götaland med expertis inom civilförsvar, krishantering och AI-teknologi.\n\nDin uppgift är att analysera information från FOI (Totalförsvarets forskningsinstitut), Carl Heath's blogg, och Ethan Mollick's blogg (One Useful Thing) för att identifiera insikter relevanta för Länsstyrelsens arbete.\n\nFokusområden:\n- Civilförsvar och totalförsvar\n- AI-säkerhet och robusthet\n- Krishantering och samhällsskydd\n- Desinformation och informationssäkerhet\n- Kritisk infrastruktur\n- Beredskap och resiliens\n\nReturnera ditt svar som ENBART ett JSON-objekt (ingen annan text) med följande struktur:\n{\n  \"executiveSummary\": \"Kort sammanfattning (3-5 meningar)\",\n  \"themes\": [\n    {\n      \"title\": \"Tema titel\",\n      \"insight\": \"Insikt om temat\",\n      \"relevanceForLansstyrelsen\": \"Varför detta är relevant\"\n    }\n  ],\n  \"keyQuotes\": [\n    {\n      \"quote\": \"Viktig citat\",\n      \"source\": \"Källa (FOI/Carl Heath/One Useful Thing)\",\n      \"context\": \"Kontext för citatet\"\n    }\n  ],\n  \"recommendations\": [\n    \"Åtgärd 1\",\n    \"Åtgärd 2\"\n  ]\n}`;\n\nconst userPrompt = `Analysera följande innehåll från den senaste veckan och generera insikter:\n\n${contentSummary}\n\nOBS: För närvarande har vi endast metadata från bloggarna. Fokusera på FOI-rapporterna för djupare analys.`;\n\ntry {\n  const requestBody = {\n    model: 'claude-sonnet-4-20250514',\n    max_tokens: 4096,\n    system: systemPrompt,\n    messages: [\n      {\n        role: 'user',\n        content: userPrompt\n      }\n    ]\n  };\n\n  const response = await $http.request({\n    method: 'POST',\n    url: 'https://api.anthropic.com/v1/messages',\n    headers: {\n      'Content-Type': 'application/json',\n      'x-api-key': CLAUDE_API_KEY,\n      'anthropic-version': '2023-06-01'\n    },\n    body: requestBody,\n    json: true\n  });\n\n  const claudeResponse = response;\n  const aiText = claudeResponse.content[0].text;\n  \n  // Parse the JSON response from Claude\n  let insights;\n  try {\n    insights = JSON.parse(aiText);\n  } catch (parseError) {\n    // If Claude returned non-JSON, wrap it\n    insights = {\n      executiveSummary: aiText.substring(0, 500),\n      themes: [],\n      keyQuotes: [],\n      recommendations: [],\n      _rawResponse: aiText\n    };\n  }\n\n  return [{\n    json: {\n      success: true,\n      executionTime: aggregatedData.executionTime,\n      sourceData: aggregatedData.sources,\n      aiInsights: insights,\n      metadata: {\n        model: 'claude-sonnet-4-20250514',\n        tokensUsed: claudeResponse.usage\n      }\n    }\n  }];\n  \n} catch (error) {\n  console.error('AI Synthesis error:', error);\n  return [{\n    json: {\n      success: false,\n      error: error.message,\n      executionTime: aggregatedData.executionTime,\n      sourceData: aggregatedData.sources,\n      aiInsights: null\n    }\n  }];\n}"
+      },
+      "id": "ai-synthesis",
+      "name": "AI Synthesis (Claude)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate HTML Email from AI Insights\nconst data = $json;\nconst insights = data.aiInsights;\nconst executionTime = new Date(data.executionTime);\n\n// Format date nicely in Swedish\nconst dateStr = executionTime.toLocaleDateString('sv-SE', { \n  weekday: 'long', \n  year: 'numeric', \n  month: 'long', \n  day: 'numeric' \n});\n\nconst html = `\n<!DOCTYPE html>\n<html lang=\"sv\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Veckorapport - Civilförsvar & AI Insikter</title>\n  <style>\n    body {\n      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;\n      line-height: 1.6;\n      color: #333;\n      max-width: 800px;\n      margin: 0 auto;\n      padding: 20px;\n      background-color: #f5f5f5;\n    }\n    .container {\n      background-color: white;\n      border-radius: 8px;\n      box-shadow: 0 2px 4px rgba(0,0,0,0.1);\n      overflow: hidden;\n    }\n    .header {\n      background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);\n      color: white;\n      padding: 30px;\n      text-align: center;\n    }\n    .header h1 {\n      margin: 0;\n      font-size: 28px;\n      font-weight: 600;\n    }\n    .header p {\n      margin: 10px 0 0 0;\n      opacity: 0.9;\n      font-size: 14px;\n    }\n    .content {\n      padding: 30px;\n    }\n    .section {\n      margin-bottom: 30px;\n    }\n    .section-title {\n      color: #1e3a8a;\n      font-size: 20px;\n      font-weight: 600;\n      margin-bottom: 15px;\n      padding-bottom: 8px;\n      border-bottom: 2px solid #3b82f6;\n    }\n    .executive-summary {\n      background-color: #eff6ff;\n      border-left: 4px solid #3b82f6;\n      padding: 20px;\n      margin-bottom: 25px;\n      border-radius: 4px;\n    }\n    .theme {\n      background-color: #f9fafb;\n      border-radius: 6px;\n      padding: 20px;\n      margin-bottom: 15px;\n      border-left: 3px solid #10b981;\n    }\n    .theme-title {\n      color: #059669;\n      font-size: 18px;\n      font-weight: 600;\n      margin-bottom: 10px;\n    }\n    .theme-insight {\n      margin-bottom: 10px;\n    }\n    .theme-relevance {\n      font-style: italic;\n      color: #666;\n      font-size: 14px;\n      margin-top: 10px;\n      padding-top: 10px;\n      border-top: 1px dashed #d1d5db;\n    }\n    .quote {\n      background-color: #fef3c7;\n      border-left: 3px solid #f59e0b;\n      padding: 15px;\n      margin-bottom: 15px;\n      border-radius: 4px;\n    }\n    .quote-text {\n      font-style: italic;\n      margin-bottom: 8px;\n    }\n    .quote-source {\n      font-weight: 600;\n      color: #d97706;\n      font-size: 14px;\n    }\n    .quote-context {\n      color: #666;\n      font-size: 13px;\n      margin-top: 5px;\n    }\n    .recommendations {\n      background-color: #f0fdf4;\n      border-radius: 6px;\n      padding: 20px;\n    }\n    .recommendations ul {\n      margin: 10px 0;\n      padding-left: 25px;\n    }\n    .recommendations li {\n      margin-bottom: 10px;\n      color: #166534;\n    }\n    .footer {\n      background-color: #f9fafb;\n      padding: 20px 30px;\n      text-align: center;\n      font-size: 13px;\n      color: #666;\n      border-top: 1px solid #e5e7eb;\n    }\n    .metadata {\n      display: inline-block;\n      background-color: #e5e7eb;\n      padding: 5px 10px;\n      border-radius: 4px;\n      margin: 5px;\n      font-size: 12px;\n    }\n    .error-message {\n      background-color: #fee2e2;\n      border: 1px solid #ef4444;\n      color: #991b1b;\n      padding: 15px;\n      border-radius: 4px;\n      margin: 20px 0;\n    }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h1>📋 Veckorapport: Civilförsvar & AI</h1>\n      <p>Insikter från FOI, Carl Heath och One Useful Thing</p>\n      <p>${dateStr}</p>\n    </div>\n    \n    <div class=\"content\">\n      ${data.success ? `\n        <!-- Executive Summary -->\n        <div class=\"executive-summary\">\n          <strong style=\"color: #1e3a8a;\">Sammanfattning</strong>\n          <p style=\"margin: 10px 0 0 0;\">${insights.executiveSummary || 'Ingen sammanfattning tillgänglig.'}</p>\n        </div>\n        \n        <!-- Themes -->\n        ${insights.themes && insights.themes.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">🎯 Huvudteman</h2>\n            ${insights.themes.map(theme => `\n              <div class=\"theme\">\n                <div class=\"theme-title\">${theme.title}</div>\n                <div class=\"theme-insight\">${theme.insight}</div>\n                ${theme.relevanceForLansstyrelsen ? `\n                  <div class=\"theme-relevance\">\n                    <strong>Relevans:</strong> ${theme.relevanceForLansstyrelsen}\n                  </div>\n                ` : ''}\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        <!-- Key Quotes -->\n        ${insights.keyQuotes && insights.keyQuotes.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">💬 Viktiga Citat</h2>\n            ${insights.keyQuotes.map(quote => `\n              <div class=\"quote\">\n                <div class=\"quote-text\">\"${quote.quote}\"</div>\n                <div class=\"quote-source\">— ${quote.source}</div>\n                ${quote.context ? `<div class=\"quote-context\">${quote.context}</div>` : ''}\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        <!-- Recommendations -->\n        ${insights.recommendations && insights.recommendations.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">✅ Rekommendationer</h2>\n            <div class=\"recommendations\">\n              <ul>\n                ${insights.recommendations.map(rec => `<li>${rec}</li>`).join('')}\n              </ul>\n            </div>\n          </div>\n        ` : ''}\n      ` : `\n        <div class=\"error-message\">\n          <strong>⚠️ Fel vid generering av rapport</strong>\n          <p>${data.error || 'Ett okänt fel uppstod vid AI-analys.'}</p>\n        </div>\n      `}\n    </div>\n    \n    <div class=\"footer\">\n      <p>\n        <span class=\"metadata\">📊 Modell: ${data.metadata?.model || 'N/A'}</span>\n        <span class=\"metadata\">⏱️ Genererad: ${dateStr}</span>\n      </p>\n      <p style=\"margin-top: 15px; font-size: 12px;\">\n        🤖 Automatiskt genererad av Länsstyrelsens AI Insights System<br>\n        Powered by Claude Sonnet 4.5 & n8n\n      </p>\n    </div>\n  </div>\n</body>\n</html>\n`;\n\n// Get execution mode from earlier in workflow\nconst modeData = $node['Detect Execution Mode'].json;\n\nreturn [{\n  json: {\n    ...data,\n    emailHtml: html,\n    emailSubject: `Veckorapport Civilförsvar & AI - ${dateStr}`,\n    emailReady: true,\n    executionMode: modeData.mode\n  }\n}];"
+      },
+      "id": "generate-html-email",
+      "name": "Generate HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "webhook-check",
+              "leftValue": "={{ $json.executionMode }}",
+              "rightValue": "webhook",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-execution-mode",
+      "name": "Check Execution Mode",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2440, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "return-json-response",
+      "name": "Return JSON Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [2660, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Execution complete (for scheduled runs)\nreturn [{\n  json: {\n    ...$ json,\n    message: 'Scheduled execution complete. Email will be sent in future implementation.',\n    completed: true\n  }\n}];"
+      },
+      "id": "scheduled-complete",
+      "name": "Scheduled Execution Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Merge Triggers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger (Monday 8 AM)": {
+      "main": [
+        [
+          {
+            "node": "Merge Triggers",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Triggers": {
+      "main": [
+        [
+          {
+            "node": "Detect Execution Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Execution Mode": {
+      "main": [
+        [
+          {
+            "node": "Prepare FOI Source",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Carl Heath Source",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare One Useful Thing Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare FOI Source": {
+      "main": [
+        [
+          {
+            "node": "Fetch FOI Reports",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch FOI Reports": {
+      "main": [
+        [
+          {
+            "node": "Parse FOI Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse FOI Results": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Carl Heath Source": {
+      "main": [
+        [
+          {
+            "node": "Fetch Carl Heath Blog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Carl Heath Blog": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Prepare One Useful Thing Source": {
+      "main": [
+        [
+          {
+            "node": "Fetch One Useful Thing Blog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch One Useful Thing Blog": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge All Sources": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results (MVP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results (MVP)": {
+      "main": [
+        [
+          {
+            "node": "AI Synthesis (Claude)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Synthesis (Claude)": {
+      "main": [
+        [
+          {
+            "node": "Generate HTML Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HTML Email": {
+      "main": [
+        [
+          {
+            "node": "Check Execution Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Execution Mode": {
+      "main": [
+        [
+          {
+            "node": "Return JSON Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scheduled Execution Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "name": "Myndighetsbevakning - Category 1 MSB Only (TEST)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "category-1-test",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 400],
+      "webhookId": "category-1-test"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\n\nlet dateFrom, dateTo;\n\nif (body.dateFrom && body.dateTo) {\n  dateFrom = body.dateFrom;\n  dateTo = body.dateTo;\n} else {\n  const now = new Date();\n  const sevenDaysAgo = new Date(now);\n  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n  \n  dateFrom = sevenDaysAgo.toISOString().split('T')[0];\n  dateTo = now.toISOString().split('T')[0];\n}\n\nreturn [{\n  json: {\n    dateFrom,\n    dateTo,\n    category: 'Sektorsansvariga',\n    executionTime: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "detect-mode",
+      "name": "Detect Mode & Parse Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://www.msb.se/sv/rss-floden/rss-alla-nyheter-fran-msb/",
+        "method": "GET",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fetch-msb-rss",
+      "name": "Fetch MSB RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rssXml = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst articles = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || \n                      itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || \n                     itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch && pubDateMatch) {\n      const pubDate = new Date(pubDateMatch[1]);\n      \n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').substring(0, 300);\n        \n        articles.push({\n          source: 'MSB',\n          category: 'Sektorsansvariga',\n          type: 'news',\n          title: titleMatch[1],\n          url: linkMatch[1],\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('MSB RSS parsing error:', e.message);\n}\n\nif (articles.length > 0) {\n  return articles.slice(0, 20).map(a => ({ json: a }));\n} else {\n  return [{ json: { source: 'MSB RSS', isEmpty: true, category: 'Sektorsansvariga' } }];\n}"
+      },
+      "id": "parse-msb-rss",
+      "name": "Parse MSB RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\n\nconst validItems = [];\nconst seenUrls = new Set();\n\nallItems.forEach(item => {\n  if (item.json.isEmpty) return;\n  \n  if (item.json.url && !seenUrls.has(item.json.url)) {\n    seenUrls.add(item.json.url);\n    validItems.push(item.json);\n  }\n});\n\nconst config = $node['Detect Mode & Parse Config'].json;\n\nconsole.log(`Category 1 MSB Only: Collected ${validItems.length} items`);\n\nreturn [{\n  json: {\n    success: true,\n    category: 'Sektorsansvariga',\n    items: validItems,\n    totalItems: validItems.length,\n    executionTime: config.executionTime,\n    dateFrom: config.dateFrom,\n    dateTo: config.dateTo,\n    sources: {\n      msb: validItems.length\n    }\n  }\n}];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Detect Mode & Parse Config", "type": "main", "index": 0}]]
+    },
+    "Detect Mode & Parse Config": {
+      "main": [[{"node": "Fetch MSB RSS", "type": "main", "index": 0}]]
+    },
+    "Fetch MSB RSS": {
+      "main": [[{"node": "Parse MSB RSS", "type": "main", "index": 0}]]
+    },
+    "Parse MSB RSS": {
+      "main": [[{"node": "Format Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

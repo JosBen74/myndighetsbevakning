@@ -1,0 +1,90 @@
+{
+  "name": "FOI Reports - Simple XML (Working)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "foi-reports",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "foi-reports-simple"
+    },
+    {
+      "parameters": {
+        "url": "https://www.foi.se/reportindex.xml",
+        "method": "GET",
+        "options": {}
+      },
+      "id": "fetch-report-index",
+      "name": "Fetch Report Index XML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "mode": "xmlToJson",
+        "options": {}
+      },
+      "id": "convert-xml",
+      "name": "Parse XML",
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and format the 10 most recent reports from XML\nconst xmlData = $json;\n\n// Navigate to urlset > url array\nlet urls = [];\ntry {\n  if (xmlData.urlset && xmlData.urlset.url) {\n    urls = Array.isArray(xmlData.urlset.url) ? xmlData.urlset.url : [xmlData.urlset.url];\n  }\n} catch (e) {\n  console.error('Error parsing XML:', e);\n  return [{ json: { success: false, error: 'Failed to parse XML', reports: [] } }];\n}\n\n// Get the last 10 URLs (most recent reports)\nconst recentUrls = urls.slice(-10).reverse(); // reverse to show newest first\n\n// Format each report\nconst reports = recentUrls.map(urlItem => {\n  const reportUrl = urlItem.loc || '';\n  const lastMod = urlItem.lastmod || 'Unknown date';\n  \n  // Extract report number from URL\n  const reportNoMatch = reportUrl.match(/reportNo=([^&]+)/);\n  const reportNo = reportNoMatch ? reportNoMatch[1] : 'Unknown';\n  \n  // Create a clean title from report number\n  const title = `FOI Report ${reportNo}`;\n  \n  return {\n    reportNo,\n    title,\n    date: lastMod,\n    url: reportUrl,\n    summary: `📄 **${title}**\\n\\n📅 Senast uppdaterad: ${lastMod}\\n\\n🔗 [Visa rapport](${reportUrl})`\n  };\n});\n\n// Return formatted response\nreturn [{\n  json: {\n    success: true,\n    count: reports.length,\n    reports,\n    message: `Hämtade ${reports.length} senaste FOI-rapporter från XML-index`,\n    method: \"XML sitemap only (fast & reliable)\",\n    note: \"Klicka på rapportlänkarna för fullständig information\"\n  }\n}];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Report Index XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Report Index XML": {
+      "main": [
+        [
+          {
+            "node": "Parse XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse XML": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

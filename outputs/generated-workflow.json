@@ -1,0 +1,35 @@
+{
+  "name": "Generated workflow: Skapa ett workflow som l?ser data fr?n H",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Start webhook",
+      "type": "n8n-nodes-base.webhook",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generated-webhook"
+      }
+    },
+    {
+      "id": "2",
+      "name": "Process",
+      "type": "n8n-nodes-base.function",
+      "parameters": {
+        "functionCode": "return [{ json: { message: \"Hello from generated workflow\", input: $json } }];"
+      }
+    }
+  ],
+  "connections": {
+    "1": {
+      "main": [
+        [
+          {
+            "node": "2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

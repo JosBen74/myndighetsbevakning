@@ -1,0 +1,116 @@
+{
+  "name": "Myndighetsbevakning - Synthesis (Simple)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "synthesis-two-stage",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 400],
+      "webhookId": "synthesis-two-stage"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json;\n\n// Handle different input formats (body wrapper or direct)\nconst input = raw.body || raw;\n\n// Debug: log what we received\nconsole.log('Input keys:', Object.keys(input));\nconsole.log('Has categories:', !!input.categories);\n\n// Extract all items from categories\nlet allItems = [];\nif (input.categories) {\n  Object.entries(input.categories).forEach(([catName, items]) => {\n    console.log(`Category ${catName}:`, items?.length || 0, 'items');\n    if (Array.isArray(items)) {\n      items.forEach(item => {\n        allItems.push({ ...item, category: catName });\n      });\n    }\n  });\n}\n\nconsole.log('Total items extracted:', allItems.length);\n\nconst now = new Date();\nconst executionTime = input.executionTime || now.toISOString();\nconst dateFrom = input.dateFrom || new Date(now - 7*24*60*60*1000).toISOString().split('T')[0];\nconst dateTo = input.dateTo || now.toISOString().split('T')[0];\n\n// Build summary for Sonnet with article indices\nlet summary = `VECKOSAMMANFATTNING MYNDIGHETSBEVAKNING\\n`;\nsummary += `Period: ${dateFrom} till ${dateTo}\\n`;\nsummary += `Antal artiklar: ${allItems.length}\\n\\n`;\nsummary += `ARTIKLAR (använd [index] för att referera):\\n\\n`;\n\nallItems.forEach((item, i) => {\n  const isCurated = item.category === 'curated' || item.type === 'curated';\n  const marker = isCurated ? '[CURATED] ' : '';\n  summary += `[${i}] ${marker}${item.source || 'Okänd'}: ${item.title || 'Utan titel'}\\n`;\n  if (item.excerpt) summary += `    ${item.excerpt.substring(0, 250)}\\n`;\n  summary += `\\n`;\n});\n\nconst systemPrompt = `Du är analytiker för Länsstyrelsen Västra Götaland med fokus på beredskap och säkerhet.\n\nVIKTIGT: Filtrera bort irrelevanta artiklar som:\n- Allmänna sidor (Om oss, Kontakt, Logotyp, etc.)\n- Evenemang och uppvisningar\n- Ekonomisk redovisning\n- E-postadresser\n\nFOKUSERA PÅ artiklar om:\n- Civilförsvar, totalförsvar, beredskap\n- Krishantering, säkerhet\n- Kritisk infrastruktur\n- Cybersäkerhet\n- Nya rapporter och utredningar\n\nSÄRSKILT VIKTIGT: Artiklar markerade med [CURATED] har lagts till manuellt och ska ALLTID inkluderas i highlightedArticles.\n\nReturnera ett JSON-objekt (ingen annan text):\n{\n  \"executiveSummary\": \"2-3 meningars sammanfattning av de viktigaste nyheterna\",\n  \"highlightedArticles\": [\n    {\n      \"index\": 0,\n      \"title\": \"Artikelns titel\",\n      \"source\": \"Källa\",\n      \"summary\": \"Kort sammanfattning av varför denna är viktig\"\n    }\n  ],\n  \"themes\": [{\"title\": \"tema\", \"insight\": \"insikt\"}],\n  \"recommendations\": [\"rekommendation\"]\n}\n\nVälj 3-10 av de MEST RELEVANTA artiklarna för highlightedArticles. Inkludera ALLTID alla [CURATED] artiklar.`;\n\nreturn [{\n  json: {\n    claudeRequest: {\n      model: 'claude-sonnet-4-20250514',\n      max_tokens: 4096,\n      system: systemPrompt,\n      messages: [{ role: 'user', content: summary }]\n    },\n    allItems,\n    totalItems: allItems.length,\n    executionTime,\n    dateFrom,\n    dateTo\n  }\n}];"
+      },
+      "id": "prepare-request",
+      "name": "Prepare Sonnet Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeRequest }}",
+        "options": { "timeout": 120000 }
+      },
+      "id": "call-sonnet",
+      "name": "Call Sonnet API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $json;\n\n// Use n8n's newer syntax for cross-node reference\nlet allItems = [];\nlet executionTime = new Date().toISOString();\nlet totalItems = 0;\n\ntry {\n  const prev = $('Prepare Sonnet Request').first().json;\n  allItems = prev.allItems || [];\n  executionTime = prev.executionTime || executionTime;\n  totalItems = prev.totalItems || 0;\n} catch(e) {\n  console.log('Could not get data from Prepare Sonnet Request:', e.message);\n}\n\nlet insights = {};\ntry {\n  let text = response.content[0].text.trim();\n  text = text.replace(/^```json?\\n?/, '').replace(/\\n?```$/, '');\n  insights = JSON.parse(text);\n} catch(e) {\n  insights = {\n    executiveSummary: response.content[0].text.substring(0, 500),\n    themes: [],\n    recommendations: ['Kunde inte tolka AI-svar'],\n    highlightedArticles: []\n  };\n}\n\nconst dateStr = new Date(executionTime).toLocaleDateString('sv-SE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\n\n// Build highlighted articles HTML with URLs from allItems\nconst highlightedHtml = (insights.highlightedArticles || []).map(article => {\n  const originalItem = allItems[article.index] || {};\n  const url = originalItem.url || '#';\n  return `\n  <div class=\"article\">\n    <h4><a href=\"${url}\" target=\"_blank\">${article.title}</a></h4>\n    <div class=\"article-meta\">${article.source}</div>\n    <p>${article.summary}</p>\n  </div>`;\n}).join('');\n\nconst html = `<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>\nbody { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }\n.header { background: #1e3a8a; color: white; padding: 20px; text-align: center; border-radius: 8px; }\n.content { padding: 20px; }\n.summary { background: #eff6ff; padding: 15px; border-left: 4px solid #3b82f6; margin: 20px 0; }\n.theme { background: #f0fdf4; padding: 15px; margin: 10px 0; border-left: 4px solid #10b981; }\n.recs { background: #fef3c7; padding: 15px; margin: 20px 0; }\n.articles { margin: 20px 0; }\n.article { background: #f8fafc; padding: 15px; margin: 10px 0; border: 1px solid #e2e8f0; border-radius: 8px; }\n.article h4 { margin: 0 0 8px 0; }\n.article h4 a { color: #1e3a8a; text-decoration: none; }\n.article h4 a:hover { text-decoration: underline; }\n.article-meta { color: #64748b; font-size: 0.9em; margin-bottom: 8px; }\n.article p { margin: 0; color: #334155; }\n.stats { display: flex; gap: 20px; margin: 20px 0; }\n.stat { background: #f3f4f6; padding: 15px; border-radius: 8px; text-align: center; flex: 1; }\n.stat-num { font-size: 24px; font-weight: bold; color: #3b82f6; }\n</style></head>\n<body>\n<div class=\"header\">\n  <h1>Veckorapport: Myndighetsbevakning</h1>\n  <p>${dateStr}</p>\n</div>\n<div class=\"content\">\n  <div class=\"stats\">\n    <div class=\"stat\"><div class=\"stat-num\">${totalItems}</div><div>Granskade artiklar</div></div>\n    <div class=\"stat\"><div class=\"stat-num\">${(insights.highlightedArticles || []).length}</div><div>Relevanta</div></div>\n  </div>\n  <div class=\"summary\">\n    <h3>Sammanfattning</h3>\n    <p>${insights.executiveSummary || 'Ingen sammanfattning'}</p>\n  </div>\n  <div class=\"articles\">\n    <h3>Utvalda nyheter</h3>\n    ${highlightedHtml || '<p>Inga relevanta artiklar identifierades.</p>'}\n  </div>\n  ${(insights.themes || []).map(t => `<div class=\"theme\"><h4>${t.title}</h4><p>${t.insight}</p></div>`).join('')}\n  ${insights.recommendations?.length ? `<div class=\"recs\"><h3>Rekommendationer</h3><ul>${insights.recommendations.map(r => `<li>${r}</li>`).join('')}</ul></div>` : ''}\n</div>\n</body></html>`;\n\nreturn [{ json: { emailHtml: html, emailSubject: `Veckorapport Myndighetsbevakning - ${dateStr}`, insights, totalItems } }];"
+      },
+      "id": "generate-email",
+      "name": "Generate Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "josef.bengtson@lansstyrelsen.se",
+        "subject": "={{ $json.emailSubject }}",
+        "message": "={{ $json.emailHtml }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1120, 400],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1340, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Prepare Sonnet Request", "type": "main", "index": 0}]]
+    },
+    "Prepare Sonnet Request": {
+      "main": [[{"node": "Call Sonnet API", "type": "main", "index": 0}]]
+    },
+    "Call Sonnet API": {
+      "main": [[{"node": "Generate Email", "type": "main", "index": 0}]]
+    },
+    "Generate Email": {
+      "main": [[
+        {"node": "Send Email", "type": "main", "index": 0},
+        {"node": "Respond", "type": "main", "index": 0}
+      ]]
+    },
+    "Send Email": {
+      "main": [[{"node": "Respond", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,298 @@
+{
+  "name": "Myndighetsbevakning - Category 1 Mini (Sektorsansvariga)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "category-1-mini",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 500],
+      "webhookId": "category-1-mini"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || $json;\n\nlet dateFrom, dateTo;\n\nif (body.dateFrom && body.dateTo) {\n  dateFrom = body.dateFrom;\n  dateTo = body.dateTo;\n} else {\n  const now = new Date();\n  const sevenDaysAgo = new Date(now);\n  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n  \n  dateFrom = sevenDaysAgo.toISOString().split('T')[0];\n  dateTo = now.toISOString().split('T')[0];\n}\n\nreturn [{\n  json: {\n    dateFrom,\n    dateTo,\n    category: 'Sektorsansvariga',\n    executionTime: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "detect-mode",
+      "name": "Detect Mode & Parse Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "url": "https://pts.se/nyheter-och-pressmeddelanden/",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": { "response": { "neverError": true } }
+        }
+      },
+      "id": "fetch-pts-news",
+      "name": "Fetch PTS News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 100],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst articles = [];\n\ntry {\n  const newsPattern = /<(?:div|article)[^>]*>([\\s\\S]*?)<\\/(?:div|article)>/gi;\n  const matches = [...html.matchAll(newsPattern)];\n  \n  for (const match of matches.slice(0, 50)) {\n    const newsHtml = match[1];\n    if (!newsHtml.includes('Nyheten publicerades')) continue;\n    \n    const titleMatch = newsHtml.match(/<h[2-4][^>]*>([^<]+)<\\/h[2-4]>/i);\n    const linkMatch = newsHtml.match(/<a[^>]*href=\"([^\"]+)\"/i);\n    const dateMatch = newsHtml.match(/\\b(\\d{4})-(\\d{2})-(\\d{2})\\b/);\n    \n    if (titleMatch && linkMatch && dateMatch) {\n      const title = titleMatch[1].trim();\n      const url = linkMatch[1].startsWith('http') ? linkMatch[1] : 'https://pts.se' + linkMatch[1];\n      const dateStr = dateMatch[0];\n      const articleDate = new Date(dateStr);\n      \n      if (articleDate >= dateFrom && articleDate <= dateTo) {\n        articles.push({ source: 'PTS', category: 'Sektorsansvariga', type: 'news', title, url, date: dateStr, excerpt: title });\n      }\n    }\n  }\n} catch (e) { console.error('PTS News error:', e.message); }\n\nreturn [{ json: { items: articles.slice(0, 10), source: 'PTS News' } }];"
+      },
+      "id": "parse-pts-news",
+      "name": "Parse PTS News",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "url": "https://pts.se/dokument/rapporter/",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": { "response": { "neverError": true } }
+        }
+      },
+      "id": "fetch-pts-reports",
+      "name": "Fetch PTS Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst reports = [];\n\ntry {\n  const pattern = /<a[^>]*href=\"([^\"]+)\"[^>]*>([^<]{15,})<\\/a>/gi;\n  const matches = [...html.matchAll(pattern)];\n  \n  for (const match of matches.slice(0, 20)) {\n    const url = match[1].startsWith('http') ? match[1] : 'https://pts.se' + match[1];\n    const title = match[2].trim();\n    \n    if (title.length > 15 && !reports.some(r => r.title === title) && (url.includes('/rapport') || url.includes('.pdf'))) {\n      reports.push({ source: 'PTS', category: 'Sektorsansvariga', type: 'report', title, url, date: config.dateTo, excerpt: title });\n    }\n  }\n} catch (e) { console.error('PTS Reports error:', e.message); }\n\nreturn [{ json: { items: reports.slice(0, 5), source: 'PTS Reports' } }];"
+      },
+      "id": "parse-pts-reports",
+      "name": "Parse PTS Reports",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://www.msb.se/sv/rss-floden/rss-alla-nyheter-fran-msb/",
+        "method": "GET",
+        "options": { "timeout": 15000 }
+      },
+      "id": "fetch-msb-news",
+      "name": "Fetch MSB News (RSS)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 350]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rss = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst articles = [];\n\ntry {\n  // Parse RSS items\n  const itemPattern = /<item>([\\s\\S]*?)<\\/item>/gi;\n  const matches = [...rss.matchAll(itemPattern)];\n  \n  for (const match of matches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[([^\\]]+)\\]\\]><\\/title>|<title>([^<]+)<\\/title>/i);\n    const linkMatch = itemXml.match(/<link>([^<]+)<\\/link>/i);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([^\\]]+)\\]\\]><\\/description>|<description>([^<]+)<\\/description>/i);\n    const dateMatch = itemXml.match(/<pubDate>([^<]+)<\\/pubDate>/i);\n    \n    if (titleMatch && linkMatch) {\n      const title = (titleMatch[1] || titleMatch[2] || '').trim();\n      const url = linkMatch[1].trim();\n      const excerpt = (descMatch ? (descMatch[1] || descMatch[2] || '') : '').trim().substring(0, 200);\n      \n      let articleDate = new Date();\n      let dateStr = config.dateTo;\n      if (dateMatch) {\n        articleDate = new Date(dateMatch[1]);\n        dateStr = articleDate.toISOString().split('T')[0];\n      }\n      \n      // Filter by date range\n      if (articleDate >= dateFrom && articleDate <= dateTo && title.length > 5) {\n        articles.push({ \n          source: 'MSB', \n          category: 'Sektorsansvariga', \n          type: 'news', \n          title, \n          url, \n          date: dateStr, \n          excerpt: excerpt || title \n        });\n      }\n    }\n  }\n} catch (e) { console.error('MSB RSS error:', e.message); }\n\nreturn [{ json: { items: articles.slice(0, 15), source: 'MSB News' } }];"
+      },
+      "id": "parse-msb-news",
+      "name": "Parse MSB News (RSS)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 350]
+    },
+    {
+      "parameters": {
+        "url": "https://www.msb.se/sv/publikationer/?sortOrder=DescendingYear",
+        "method": "GET",
+        "options": { "timeout": 15000 }
+      },
+      "id": "fetch-msb-pubs",
+      "name": "Fetch MSB Publications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 450]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst pubs = [];\n\ntry {\n  const pattern = /<a[^>]*href=\"([^\"]+)\"[^>]*>([^<]{20,})<\\/a>/gi;\n  const matches = [...html.matchAll(pattern)];\n  \n  for (const match of matches.slice(0, 30)) {\n    const url = match[1].startsWith('http') ? match[1] : 'https://www.msb.se' + match[1];\n    const title = match[2].trim();\n    \n    if (title.length > 20 && !pubs.some(p => p.title === title) && url.includes('/publikation')) {\n      pubs.push({ source: 'MSB', category: 'Sektorsansvariga', type: 'publication', title, url, date: config.dateTo, excerpt: title });\n    }\n  }\n} catch (e) { console.error('MSB Pubs error:', e.message); }\n\nreturn [{ json: { items: pubs.slice(0, 5), source: 'MSB Publications' } }];"
+      },
+      "id": "parse-msb-pubs",
+      "name": "Parse MSB Publications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 450]
+    },
+    {
+      "parameters": {
+        "url": "https://www.forsvarsmakten.se/sv/om-forsvarsmakten/dokument/",
+        "method": "GET",
+        "options": { "timeout": 15000 }
+      },
+      "id": "fetch-fm-docs",
+      "name": "Fetch Försvarsmakten Docs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst docs = [];\n\ntry {\n  const pattern = /<a[^>]*href=\"([^\"]+)\"[^>]*>([^<]{15,})<\\/a>/gi;\n  const matches = [...html.matchAll(pattern)];\n  \n  for (const match of matches.slice(0, 30)) {\n    const url = match[1].startsWith('http') ? match[1] : 'https://www.forsvarsmakten.se' + match[1];\n    const title = match[2].trim();\n    \n    if (title.length > 15 && !docs.some(d => d.title === title)) {\n      docs.push({ source: 'Försvarsmakten', category: 'Sektorsansvariga', type: 'document', title, url, date: config.dateTo, excerpt: title });\n    }\n  }\n} catch (e) { console.error('FM error:', e.message); }\n\nreturn [{ json: { items: docs.slice(0, 10), source: 'Försvarsmakten' } }];"
+      },
+      "id": "parse-fm-docs",
+      "name": "Parse Försvarsmakten Docs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "url": "https://www.foi.se/rapporter.html",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "fetch-foi-reports",
+      "name": "Fetch FOI Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 750]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst reports = [];\n\ntry {\n  // FOI rapporter har oftast format: titel med länk till rapport\n  const pattern = /<a[^>]*href=\"([^\"]*(?:rapport|publication|pdf)[^\"]*)\"[^>]*>([^<]{15,})<\\/a>/gi;\n  const matches = [...html.matchAll(pattern)];\n  \n  for (const match of matches.slice(0, 30)) {\n    let url = match[1];\n    if (!url.startsWith('http')) {\n      url = 'https://www.foi.se' + (url.startsWith('/') ? '' : '/') + url;\n    }\n    const title = match[2].trim();\n    \n    if (title.length > 15 && !reports.some(r => r.title === title)) {\n      reports.push({ \n        source: 'FOI', \n        category: 'Sektorsansvariga', \n        type: 'report', \n        title, \n        url, \n        date: config.dateTo, \n        excerpt: title \n      });\n    }\n  }\n  \n  // Fallback: sök efter alla länkar med längre titlar\n  if (reports.length === 0) {\n    const fallbackPattern = /<a[^>]*href=\"(\\/[^\"]+)\"[^>]*>([^<]{20,})<\\/a>/gi;\n    const fallbackMatches = [...html.matchAll(fallbackPattern)];\n    \n    for (const match of fallbackMatches.slice(0, 20)) {\n      const url = 'https://www.foi.se' + match[1];\n      const title = match[2].trim();\n      \n      if (title.length > 20 && !reports.some(r => r.title === title) && !url.includes('cookie') && !url.includes('login')) {\n        reports.push({ \n          source: 'FOI', \n          category: 'Sektorsansvariga', \n          type: 'report', \n          title, \n          url, \n          date: config.dateTo, \n          excerpt: title \n        });\n      }\n    }\n  }\n} catch (e) { console.error('FOI error:', e.message); }\n\nreturn [{ json: { items: reports.slice(0, 10), source: 'FOI' } }];"
+      },
+      "id": "parse-foi-reports",
+      "name": "Parse FOI Reports",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 750]
+    },
+    {
+      "parameters": {
+        "url": "https://www.mtfa.se/publikationer/",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+            { "name": "Accept-Language", "value": "sv-SE,sv;q=0.9,en;q=0.8" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "fetch-mtfa-pubs",
+      "name": "Fetch MTFA Publications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [680, 900],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.data || '';\nconst config = $node['Detect Mode & Parse Config'].json;\nconst pubs = [];\n\ntry {\n  const linkPattern = /<a[^>]*href=\"(\\/publikationer\\/[^\"]+)\"[^>]*>([^<]+)<\\/a>/gi;\n  const matches = [...html.matchAll(linkPattern)];\n  \n  for (const match of matches.slice(0, 20)) {\n    const url = 'https://www.mtfa.se' + match[1];\n    const title = match[2].trim();\n    \n    if (title.length > 10 && !pubs.some(p => p.url === url)) {\n      pubs.push({ source: 'MTFA', category: 'Sektorsansvariga', type: 'publication', title, url, date: config.dateTo, excerpt: title });\n    }\n  }\n} catch (e) { console.error('MTFA error:', e.message); }\n\nreturn [{ json: { items: pubs.slice(0, 10), source: 'MTFA' } }];"
+      },
+      "id": "parse-mtfa-pubs",
+      "name": "Parse MTFA Publications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 900]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect from all parse nodes\nconst config = $node['Detect Mode & Parse Config'].json;\n\nconst allItems = [];\nconst sources = {\n  pts: 0, msb: 0, fm: 0, foi: 0, mtfa: 0\n};\n\n// Get items from each parse node\nconst parseNodes = [\n  'Parse PTS News',\n  'Parse PTS Reports', \n  'Parse MSB News (RSS)',\n  'Parse MSB Publications',\n  'Parse Försvarsmakten Docs',\n  'Parse FOI Reports',\n  'Parse MTFA Publications'\n];\n\nfor (const nodeName of parseNodes) {\n  try {\n    const nodeData = $node[nodeName].json;\n    if (nodeData && nodeData.items && Array.isArray(nodeData.items)) {\n      for (const item of nodeData.items) {\n        allItems.push(item);\n        if (item.source === 'PTS') sources.pts++;\n        else if (item.source === 'MSB') sources.msb++;\n        else if (item.source === 'Försvarsmakten') sources.fm++;\n        else if (item.source === 'FOI') sources.foi++;\n        else if (item.source === 'MTFA') sources.mtfa++;\n      }\n    }\n  } catch (e) {\n    console.log(`Could not get data from ${nodeName}:`, e.message);\n  }\n}\n\n// Deduplicate by URL\nconst seenUrls = new Set();\nconst uniqueItems = [];\nfor (const item of allItems) {\n  if (item.url && !seenUrls.has(item.url)) {\n    seenUrls.add(item.url);\n    uniqueItems.push(item);\n  }\n}\n\nreturn [{\n  json: {\n    success: true,\n    category: 'Sektorsansvariga',\n    items: uniqueItems,\n    totalItems: uniqueItems.length,\n    executionTime: config.executionTime,\n    dateFrom: config.dateFrom,\n    dateTo: config.dateTo,\n    sources\n  }\n}];"
+      },
+      "id": "collect-all",
+      "name": "Collect All Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Detect Mode & Parse Config", "type": "main", "index": 0}]]
+    },
+    "Detect Mode & Parse Config": {
+      "main": [[
+        {"node": "Fetch PTS News", "type": "main", "index": 0},
+        {"node": "Fetch PTS Reports", "type": "main", "index": 0},
+        {"node": "Fetch MSB News (RSS)", "type": "main", "index": 0},
+        {"node": "Fetch MSB Publications", "type": "main", "index": 0},
+        {"node": "Fetch Försvarsmakten Docs", "type": "main", "index": 0},
+        {"node": "Fetch FOI Reports", "type": "main", "index": 0},
+        {"node": "Fetch MTFA Publications", "type": "main", "index": 0}
+      ]]
+    },
+    "Fetch PTS News": {
+      "main": [[{"node": "Parse PTS News", "type": "main", "index": 0}]]
+    },
+    "Parse PTS News": {
+      "main": [[{"node": "Collect All Sources", "type": "main", "index": 0}]]
+    },
+    "Fetch PTS Reports": {
+      "main": [[{"node": "Parse PTS Reports", "type": "main", "index": 0}]]
+    },
+    "Parse PTS Reports": {
+      "main": [[{"node": "Collect All Sources", "type": "main", "index": 0}]]
+    },
+    "Fetch MSB News (RSS)": {
+      "main": [[{"node": "Parse MSB News (RSS)", "type": "main", "index": 0}]]
+    },
+    "Parse MSB News (RSS)": {
+      "main": [[{"node": "Collect All Sources", "type": "main", "index": 0}]]
+    },
+    "Fetch MSB Publications": {
+      "main": [[{"node": "Parse MSB Publications", "type": "main", "index": 0}]]
+    },
+    "Parse MSB Publications": {
+      "main": [[{"node": "Collect All Sources", "type": "main", "index": 0}]]
+    },
+    "Fetch Försvarsmakten Docs": {
+      "main": [[{"node": "Parse Försvarsmakten Docs", "type": "main", "index": 0}]]
+    },
+    "Parse Försvarsmakten Docs": {
+      "main": [[{"node": "Collect All Sources", "type": "main", "index": 0}]]
+    },
+    "Fetch FOI Reports": {
+      "main": [[{"node": "Parse FOI Reports", "type": "main", "index": 0}]]
+    },
+    "Parse FOI Reports": {
+      "main": [[{"node": "Collect All Sources", "type": "main", "index": 0}]]
+    },
+    "Fetch MTFA Publications": {
+      "main": [[{"node": "Parse MTFA Publications", "type": "main", "index": 0}]]
+    },
+    "Parse MTFA Publications": {
+      "main": [[{"node": "Collect All Sources", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,301 @@
+{
+  "name": "Myndighetsbevakning - Synthesis (2-Stage AI)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "synthesis-two-stage",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 400],
+      "webhookId": "synthesis-two-stage"
+    },
+    {
+      "parameters": {
+        "jsCode": "const aggregatedData = $json;\n\nlet allItems = [];\n\nif (aggregatedData.categories) {\n  Object.entries(aggregatedData.categories).forEach(([catName, items]) => {\n    if (Array.isArray(items)) {\n      items.forEach(item => {\n        allItems.push({\n          ...item,\n          category: catName\n        });\n      });\n    }\n  });\n}\n\nreturn [{\n  json: {\n    allItems,\n    totalItems: allItems.length,\n    hasItems: allItems.length > 0,\n    executionTime: aggregatedData.executionTime || new Date().toISOString(),\n    dateFrom: aggregatedData.dateFrom,\n    dateTo: aggregatedData.dateTo,\n    metadata: aggregatedData.metadata || {}\n  }\n}];"
+      },
+      "id": "parse-aggregated-data",
+      "name": "Parse Aggregated Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasItems }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "has-items-check",
+      "name": "Has Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst allItems = data.allItems || [];\n\nconst compactSummary = allItems.map((item, idx) => {\n  return `${idx}. [${item.source || 'Okänd källa'}] ${item.title || 'Ingen titel'}\\n   Utdrag: ${(item.excerpt || item.title || '').substring(0, 150)}`;\n}).join('\\n\\n');\n\nconst filterPrompt = `Du är en filtreringsassistent för Länsstyrelsen i Västra Götaland.\n\nUPPDRAG: Identifiera vilka av följande ${allItems.length} artiklar som är relevanta för beredskap och säkerhet.\n\nINKLUDERA artiklar om:\n- Civilförsvar och totalförsvar\n- Cybersäkerhet och informationssäkerhet\n- Krishantering och krisberedskap  \n- Samhällsskydd och säkerhet\n- Kritisk infrastruktur (el, vatten, transport, kommunikation, livsmedel)\n- Desinformation och påverkansoperationer\n- Internationella säkerhetshot\n- AI-säkerhet och teknisk robusthet\n- Beredskap och resiliens\n\nEXKLUDERA artiklar om:\n- Allmän politik utan säkerhetskoppling (budget, val, partiinterna frågor)\n- Rutinmässig tillsyn eller administration\n- Trafik och vägunderhåll (om ej kritisk infrastruktur)\n- Allmän företagsinformation\n- Kultur och fritid\n\nARTIKLAR:\n${compactSummary}\n\nRETURNERA: En JSON-array med index-nummer för relevanta artiklar.\nExempel format: [0, 3, 7, 12, 18]\n\nOm inga artiklar är relevanta, returnera en tom array: []`;\n\nreturn [{\n  json: {\n    claudeRequest: {\n      model: 'claude-3-5-haiku-20241022',\n      max_tokens: 2048,\n      messages: [{\n        role: 'user',\n        content: filterPrompt\n      }]\n    },\n    originalItems: allItems,\n    totalOriginalItems: allItems.length,\n    metadata: data.metadata,\n    executionTime: data.executionTime,\n    dateFrom: data.dateFrom,\n    dateTo: data.dateTo\n  }\n}];"
+      },
+      "id": "stage1-relevance-filter",
+      "name": "Stage 1 - Relevance Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// No items path - generate empty report\nconst data = $json;\n\nreturn [{\n  json: {\n    success: true,\n    noItems: true,\n    executionTime: data.executionTime || new Date().toISOString(),\n    dateFrom: data.dateFrom,\n    dateTo: data.dateTo,\n    aiInsights: {\n      executiveSummary: 'Inga relevanta artiklar hittades under denna period.',\n      themes: [],\n      keyQuotes: [],\n      recommendations: ['Kontrollera att datakällorna är tillgängliga och fungerar korrekt.']\n    },\n    metadata: {\n      totalOriginal: 0,\n      totalFiltered: 0,\n      categoryBreakdown: {}\n    }\n  }\n}];"
+      },
+      "id": "no-items-response",
+      "name": "No Items Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeRequest }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "call-haiku-filter",
+      "name": "Call Haiku Filter API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Bypass Haiku filter - pass all items through\nconst claudeResponse = $json;\nlet previousNode;\ntry {\n  previousNode = $node['Stage 1 - Relevance Filter'].json;\n} catch(e) {\n  // Fallback if node reference fails\n  previousNode = { originalItems: [], metadata: {}, executionTime: new Date().toISOString() };\n}\nconst originalItems = previousNode.originalItems || [];\n\n// Pass ALL items through (bypass Haiku filtering)\nconst filteredItems = originalItems;\n\nreturn [{\n  json: {\n    filteredItems,\n    totalFiltered: filteredItems.length,\n    totalOriginal: originalItems.length,\n    filterRatio: 1,\n    metadata: previousNode.metadata || {},\n    executionTime: previousNode.executionTime,\n    dateFrom: previousNode.dateFrom,\n    dateTo: previousNode.dateTo,\n    stage1Tokens: claudeResponse.usage\n  }\n}];"
+      },
+      "id": "parse-filter-response",
+      "name": "Parse Filter Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst filteredItems = data.filteredItems || [];\n\nif (filteredItems.length === 0) {\n  return [{\n    json: {\n      shouldCallSonnet: true,\n      skipAnalysis: true,\n      noRelevantItems: true,\n      claudeRequest: {\n        model: 'claude-sonnet-4-20250514',\n        max_tokens: 500,\n        messages: [{\n          role: 'user',\n          content: 'Returnera exakt detta JSON-objekt utan ändringar: {\"executiveSummary\": \"Inga relevanta artiklar hittades för beredskap och säkerhet denna period.\", \"themes\": [], \"keyQuotes\": [], \"recommendations\": [\"Kontrollera datakällorna\"]}'\n        }]\n      },\n      executionTime: data.executionTime,\n      dateFrom: data.dateFrom,\n      dateTo: data.dateTo,\n      metadata: {\n        totalOriginal: data.totalOriginal,\n        totalFiltered: 0,\n        categoryBreakdown: {}\n      }\n    }\n  }];\n}\n\nconst categories = {\n  'sektorsansvariga': [],\n  'regeringen': [],\n  'international': [],\n  'övriga': []\n};\n\nfilteredItems.forEach(item => {\n  const cat = item.category || 'övriga';\n  if (!categories[cat]) categories[cat] = [];\n  categories[cat].push(item);\n});\n\nlet detailedSummary = `DATUMINTERVALL: ${data.dateFrom} till ${data.dateTo}\\n\\n`;\ndetailedSummary += `ANTAL ARTIKLAR: ${filteredItems.length} relevanta (av ${data.totalOriginal} totalt)\\n\\n`;\n\nObject.entries(categories).forEach(([catName, items]) => {\n  if (items.length === 0) return;\n  \n  detailedSummary += `\\n=== ${catName.toUpperCase()} (${items.length} artiklar) ===\\n`;\n  \n  items.forEach((item, i) => {\n    detailedSummary += `\\n${i+1}. [${item.source || 'Okänd'}] ${item.title || 'Ingen titel'}\\n`;\n    detailedSummary += `   Datum: ${item.date || 'Okänt'}\\n`;\n    detailedSummary += `   URL: ${item.url || 'Ingen URL'}\\n`;\n    if (item.excerpt) {\n      detailedSummary += `   Innehåll: ${item.excerpt.substring(0, 400)}\\n`;\n    }\n  });\n});\n\nconst systemPrompt = `Du är en strategisk analytiker för Länsstyrelsen i Västra Götaland med expertis inom civilförsvar, krishantering och samhällssäkerhet.\n\nFOKUSOMRÅDEN:\n- Civilförsvar och totalförsvar\n- Cybersäkerhet och informationssäkerhet\n- Krishantering och samhällsskydd\n- Kritisk infrastruktur\n- Internationella säkerhetshot\n- AI-säkerhet och teknisk robusthet\n- Beredskap och resiliens\n\nINSTRUKTIONER:\n1. Identifiera 3-5 huvudteman från materialet\n2. Extrahera viktiga citat med källhänvisning\n3. Formulera konkreta rekommendationer för Länsstyrelsen\n4. Fokusera på åtgärbara insikter\n5. Skriv på svenska\n\nRETURNERA: Ett JSON-objekt (INGEN annan text, inga markdown-kodblock):\n{\n  \"executiveSummary\": \"Kort sammanfattning (3-5 meningar)\",\n  \"themes\": [\n    {\n      \"title\": \"Tema titel\",\n      \"insight\": \"Huvudinsikt om temat\",\n      \"relevanceForLansstyrelsen\": \"Varför detta är relevant\",\n      \"sources\": [\"Källa 1\", \"Källa 2\"]\n    }\n  ],\n  \"keyQuotes\": [\n    {\n      \"quote\": \"Viktigt citat från materialet\",\n      \"source\": \"Källans namn (myndighet)\",\n      \"context\": \"Kontext och varför detta är viktigt\"\n    }\n  ],\n  \"recommendations\": [\n    \"Konkret åtgärd 1\",\n    \"Konkret åtgärd 2\"\n  ]\n}`;\n\nreturn [{\n  json: {\n    shouldCallSonnet: true,\n    claudeRequest: {\n      model: 'claude-sonnet-4-20250514',\n      max_tokens: 4096,\n      system: systemPrompt,\n      messages: [{\n        role: 'user',\n        content: detailedSummary\n      }]\n    },\n    metadata: {\n      ...data.metadata,\n      totalOriginal: data.totalOriginal,\n      totalFiltered: filteredItems.length,\n      categoryBreakdown: Object.fromEntries(\n        Object.entries(categories).map(([k, v]) => [k, v.length])\n      ),\n      stage1Tokens: data.stage1Tokens\n    },\n    executionTime: data.executionTime,\n    dateFrom: data.dateFrom,\n    dateTo: data.dateTo\n  }\n}];"
+      },
+      "id": "stage2-prepare-deep-analysis",
+      "name": "Stage 2 - Prepare Deep Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "leftValue": "={{ $json.shouldCallSonnet }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "should-call-sonnet",
+      "name": "Should Call Sonnet?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeRequest }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "call-sonnet-api",
+      "name": "Call Sonnet 4 API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [2000, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claudeResponse = $json;\nconst previousNode = $node['Stage 2 - Prepare Deep Analysis'].json;\n\ntry {\n  let aiText = claudeResponse.content[0].text.trim();\n  \n  aiText = aiText.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '');\n  \n  let insights;\n  try {\n    insights = JSON.parse(aiText);\n  } catch (parseError) {\n    console.error('JSON parsing error:', parseError.message);\n    insights = {\n      executiveSummary: aiText.substring(0, 500) + '...',\n      themes: [],\n      keyQuotes: [],\n      recommendations: ['Kunde inte tolka AI-svar korrekt. Vänligen granska manuellt.']\n    };\n  }\n  \n  return [{\n    json: {\n      success: true,\n      executionTime: previousNode.executionTime,\n      dateFrom: previousNode.dateFrom,\n      dateTo: previousNode.dateTo,\n      aiInsights: insights,\n      metadata: {\n        ...previousNode.metadata,\n        model: 'claude-sonnet-4-20250514',\n        stage1Tokens: previousNode.metadata.stage1Tokens,\n        stage2Tokens: claudeResponse.usage,\n        totalTokens: {\n          input: (previousNode.metadata.stage1Tokens?.input_tokens || 0) + (claudeResponse.usage?.input_tokens || 0),\n          output: (previousNode.metadata.stage1Tokens?.output_tokens || 0) + (claudeResponse.usage?.output_tokens || 0)\n        }\n      }\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      success: false,\n      error: error.message,\n      executionTime: previousNode.executionTime,\n      metadata: previousNode.metadata\n    }\n  }];\n}"
+      },
+      "id": "parse-synthesis-response",
+      "name": "Parse Synthesis Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 200]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-paths",
+      "name": "Merge Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [2440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst insights = data.aiInsights || {};\nconst executionTime = new Date(data.executionTime || new Date());\n\nconst dateStr = executionTime.toLocaleDateString('sv-SE', { \n  weekday: 'long', \n  year: 'numeric', \n  month: 'long', \n  day: 'numeric' \n});\n\nconst metadata = data.metadata || {};\nconst totalOriginal = metadata.totalOriginal || 0;\nconst totalFiltered = metadata.totalFiltered || 0;\nconst categoryBreakdown = metadata.categoryBreakdown || {};\n\nconst filterRatio = totalOriginal > 0 ? Math.round(totalFiltered / totalOriginal * 100) : 0;\n\nconst html = `\n<!DOCTYPE html>\n<html lang=\"sv\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Veckorapport - Myndighetsbevakning</title>\n  <style>\n    body { font-family: 'Segoe UI', sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }\n    .container { background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }\n    .header { background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); color: white; padding: 30px; text-align: center; }\n    .header h1 { margin: 0; font-size: 28px; font-weight: 600; }\n    .header p { margin: 10px 0 0 0; opacity: 0.9; font-size: 14px; }\n    .content { padding: 30px; }\n    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 30px; }\n    .stat-box { background: #f9fafb; padding: 20px; border-radius: 6px; text-align: center; border: 2px solid #e5e7eb; }\n    .stat-number { font-size: 32px; font-weight: 700; color: #3b82f6; margin-bottom: 5px; }\n    .stat-label { font-size: 13px; color: #666; }\n    .executive-summary { background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 20px; margin-bottom: 25px; border-radius: 4px; }\n    .section { margin-bottom: 30px; }\n    .section-title { color: #1e3a8a; font-size: 20px; font-weight: 600; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #3b82f6; }\n    .theme { background-color: #f9fafb; border-radius: 6px; padding: 20px; margin-bottom: 15px; border-left: 3px solid #10b981; }\n    .theme-title { color: #059669; font-size: 18px; font-weight: 600; margin-bottom: 10px; }\n    .theme-relevance { font-style: italic; color: #666; font-size: 14px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #d1d5db; }\n    .theme-sources { font-size: 12px; color: #888; margin-top: 8px; }\n    .quote { background-color: #fef3c7; border-left: 3px solid #f59e0b; padding: 15px; margin-bottom: 15px; border-radius: 4px; }\n    .quote-text { font-style: italic; margin-bottom: 8px; }\n    .quote-source { font-weight: 600; color: #d97706; font-size: 14px; }\n    .recommendations { background-color: #f0fdf4; border-radius: 6px; padding: 20px; }\n    .recommendations ul { margin: 10px 0; padding-left: 25px; }\n    .recommendations li { margin-bottom: 10px; color: #166534; }\n    .footer { background-color: #f9fafb; padding: 20px 30px; text-align: center; font-size: 13px; color: #666; border-top: 1px solid #e5e7eb; }\n    .no-items { background-color: #fef3c7; padding: 30px; text-align: center; border-radius: 6px; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h1>Veckorapport: Myndighetsbevakning</h1>\n      <p>Beredskap & Säkerhet</p>\n      <p>${dateStr}</p>\n    </div>\n    \n    <div class=\"content\">\n      ${totalOriginal > 0 ? `\n        <div class=\"stats-grid\">\n          <div class=\"stat-box\">\n            <div class=\"stat-number\">${totalOriginal}</div>\n            <div class=\"stat-label\">Artiklar granskade</div>\n          </div>\n          <div class=\"stat-box\">\n            <div class=\"stat-number\">${totalFiltered}</div>\n            <div class=\"stat-label\">Relevanta för beredskap</div>\n          </div>\n          <div class=\"stat-box\">\n            <div class=\"stat-number\">${filterRatio}%</div>\n            <div class=\"stat-label\">Filtreringsgrad</div>\n          </div>\n        </div>\n      ` : `\n        <div class=\"no-items\">\n          <h2>Inga artiklar hittades</h2>\n          <p>Kontrollera att datakällorna är tillgängliga.</p>\n        </div>\n      `}\n      \n      ${data.success ? `\n        <div class=\"executive-summary\">\n          <strong style=\"color: #1e3a8a;\">Sammanfattning</strong>\n          <p style=\"margin: 10px 0 0 0;\">${insights.executiveSummary || 'Ingen sammanfattning tillgänglig.'}</p>\n        </div>\n        \n        ${insights.themes?.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">Huvudteman</h2>\n            ${insights.themes.map(theme => `\n              <div class=\"theme\">\n                <div class=\"theme-title\">${theme.title}</div>\n                <div>${theme.insight}</div>\n                ${theme.relevanceForLansstyrelsen ? `<div class=\"theme-relevance\"><strong>Relevans:</strong> ${theme.relevanceForLansstyrelsen}</div>` : ''}\n                ${theme.sources ? `<div class=\"theme-sources\">Källor: ${theme.sources.join(', ')}</div>` : ''}\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        ${insights.keyQuotes?.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">Viktiga Citat</h2>\n            ${insights.keyQuotes.map(quote => `\n              <div class=\"quote\">\n                <div class=\"quote-text\">\"${quote.quote}\"</div>\n                <div class=\"quote-source\">— ${quote.source}</div>\n              </div>\n            `).join('')}\n          </div>\n        ` : ''}\n        \n        ${insights.recommendations?.length > 0 ? `\n          <div class=\"section\">\n            <h2 class=\"section-title\">Rekommendationer</h2>\n            <div class=\"recommendations\">\n              <ul>\n                ${insights.recommendations.map(rec => `<li>${rec}</li>`).join('')}\n              </ul>\n            </div>\n          </div>\n        ` : ''}\n      ` : `<div style=\"padding: 20px; background: #fee; color: #a00;\"><strong>Fel:</strong> ${data.error || 'Okänt fel'}</div>`}\n    </div>\n    \n    <div class=\"footer\">\n      <p>Automatiskt genererad av Länsstyrelsens Beredskapsbevakningssystem</p>\n    </div>\n  </div>\n</body>\n</html>\n`;\n\nreturn [{\n  json: {\n    ...data,\n    emailHtml: html,\n    emailSubject: `Veckorapport Myndighetsbevakning - ${dateStr}`,\n    shouldSendEmail: true\n  }\n}];"
+      },
+      "id": "generate-html-email",
+      "name": "Generate HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 400]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "josef.bengtson@lansstyrelsen.se",
+        "subject": "={{ $json.emailSubject }}",
+        "message": "={{ $json.emailHtml }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Weekly Report Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2880, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "return-json",
+      "name": "Return JSON Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [2880, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Parse Aggregated Data", "type": "main", "index": 0}]]
+    },
+    "Parse Aggregated Data": {
+      "main": [[{"node": "Has Items?", "type": "main", "index": 0}]]
+    },
+    "Has Items?": {
+      "main": [
+        [{"node": "Stage 1 - Relevance Filter", "type": "main", "index": 0}],
+        [{"node": "No Items Response", "type": "main", "index": 0}]
+      ]
+    },
+    "No Items Response": {
+      "main": [[{"node": "Merge Paths", "type": "main", "index": 1}]]
+    },
+    "Stage 1 - Relevance Filter": {
+      "main": [[{"node": "Call Haiku Filter API", "type": "main", "index": 0}]]
+    },
+    "Call Haiku Filter API": {
+      "main": [[{"node": "Parse Filter Response", "type": "main", "index": 0}]]
+    },
+    "Parse Filter Response": {
+      "main": [[{"node": "Stage 2 - Prepare Deep Analysis", "type": "main", "index": 0}]]
+    },
+    "Stage 2 - Prepare Deep Analysis": {
+      "main": [[{"node": "Should Call Sonnet?", "type": "main", "index": 0}]]
+    },
+    "Should Call Sonnet?": {
+      "main": [
+        [{"node": "Call Sonnet 4 API", "type": "main", "index": 0}],
+        [{"node": "Merge Paths", "type": "main", "index": 1}]
+      ]
+    },
+    "Call Sonnet 4 API": {
+      "main": [[{"node": "Parse Synthesis Response", "type": "main", "index": 0}]]
+    },
+    "Parse Synthesis Response": {
+      "main": [[{"node": "Merge Paths", "type": "main", "index": 0}]]
+    },
+    "Merge Paths": {
+      "main": [[{"node": "Generate HTML Email", "type": "main", "index": 0}]]
+    },
+    "Generate HTML Email": {
+      "main": [[
+        {"node": "Send Weekly Report Email", "type": "main", "index": 0},
+        {"node": "Return JSON Response", "type": "main", "index": 0}
+      ]]
+    },
+    "Send Weekly Report Email": {
+      "main": [[{"node": "Return JSON Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

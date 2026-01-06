@@ -1,0 +1,18 @@
+{
+  "name": "n8n-claude-demo",
+  "version": "0.1.0",
+  "description": "Demo: generate n8n workflow from free text (Claude Code stub) and export to n8n Cloud",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "export": "node index.js export"
+  },
+  "dependencies": {
+    "axios": "^1.4.0",
+    "dotenv": "^16.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "commonjs"
+}

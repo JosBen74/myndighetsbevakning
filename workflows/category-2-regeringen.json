@@ -1,0 +1,37 @@
+{
+  "name": "Myndighetsbevakning - Category 2 (Regeringen & Riksdagen)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "category-2-regeringen",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 400],
+      "webhookId": "category-2-regeringen"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fetch all RSS feeds and parse them\nconst RSS_FEEDS = [\n  { url: 'https://data.riksdagen.se/dokumentlista/?avd=dokument&doktyp=prop&sort=datum&sortorder=desc&utformat=rss&sz=20', type: 'proposition', source: 'Propositioner' },\n  { url: 'https://data.riksdagen.se/dokumentlista/?avd=dokument&doktyp=sou&sort=datum&sortorder=desc&utformat=rss&sz=20', type: 'SOU', source: 'SOU' },\n  { url: 'https://data.riksdagen.se/dokumentlista/?avd=dokument&doktyp=ds&sort=datum&sortorder=desc&utformat=rss&sz=20', type: 'Ds', source: 'Ds' },\n  { url: 'https://data.riksdagen.se/dokumentlista/?avd=dokument&doktyp=bet&beslutad=1&sort=beslutsdag&sortorder=desc&utformat=rss&sz=20', type: 'betankande', source: 'Betankanden' }\n];\n\nconst allItems = [];\nconst sources = { propositioner: 0, sou: 0, ds: 0, betankanden: 0 };\n\nfor (const feed of RSS_FEEDS) {\n  try {\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url: feed.url,\n      timeout: 15000\n    });\n    \n    // Parse RSS - response is already parsed by n8n\n    const items = response?.rss?.channel?.item || [];\n    const itemArray = Array.isArray(items) ? items : [items];\n    \n    for (const item of itemArray.slice(0, 15)) {\n      const title = item.title || '';\n      const url = item.link || '';\n      const excerpt = (item.description || '').replace(/&nbsp;/g, ' ').substring(0, 300);\n      const dateStr = item.pubDate ? new Date(item.pubDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];\n      \n      if (title.length > 5 && url) {\n        allItems.push({\n          source: 'Riksdagen',\n          category: 'Regeringen',\n          type: feed.type,\n          title,\n          url,\n          date: dateStr,\n          excerpt: excerpt || title\n        });\n        \n        // Count\n        if (feed.source === 'Propositioner') sources.propositioner++;\n        else if (feed.source === 'SOU') sources.sou++;\n        else if (feed.source === 'Ds') sources.ds++;\n        else if (feed.source === 'Betankanden') sources.betankanden++;\n      }\n    }\n  } catch (e) {\n    console.error(`Error fetching ${feed.source}:`, e.message);\n  }\n}\n\n// Deduplicate by URL\nconst seenUrls = new Set();\nconst uniqueItems = [];\nfor (const item of allItems) {\n  if (item.url && !seenUrls.has(item.url)) {\n    seenUrls.add(item.url);\n    uniqueItems.push(item);\n  }\n}\n\nconst now = new Date();\nconst sevenDaysAgo = new Date(now);\nsevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n\nreturn [{\n  json: {\n    success: true,\n    category: 'Regeringen',\n    items: uniqueItems,\n    totalItems: uniqueItems.length,\n    executionTime: now.toISOString(),\n    dateFrom: sevenDaysAgo.toISOString().split('T')[0],\n    dateTo: now.toISOString().split('T')[0],\n    sources\n  }\n}];"
+      },
+      "id": "fetch-and-parse-all",
+      "name": "Fetch & Parse All RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Fetch & Parse All RSS", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,28 @@
+# Environment
+.env
+.env.local
+
+# Node
+node_modules/
+.npm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Secrets - never commit API keys
+**/credentials.json
+**/token.json

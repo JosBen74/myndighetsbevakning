@@ -1,0 +1,154 @@
+{
+  "name": "AI Insights – Curated Articles via Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "labelIds": ["Label_5050537815587673975"]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [0, 0],
+      "id": "2eb45b38-608c-49bf-9146-990f46c4d131",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "wHztIiURsH7pi9w0",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const mail = $json;\n\n// VIKTIGT: Kontrollera att mailet skickades till +news-adressen\nconst toAddresses = mail.to || mail.labelIds || '';\nconst toField = JSON.stringify(toAddresses).toLowerCase();\nconst deliveredTo = (mail.headers?.['delivered-to'] || mail.deliveredTo || '').toLowerCase();\nconst allRecipients = (toField + ' ' + deliveredTo).toLowerCase();\n\n// Kontrollera om mailet ar till +news-adressen\nif (!allRecipients.includes('josefbengtson+news@gmail.com') && \n    !allRecipients.includes('+news')) {\n  // Returnera tom array for att hoppa over detta mail\n  return [];\n}\n\n// Samla text for URL-sokning\nconst textSources = [mail.text, mail.textPlain, mail.snippet, mail.html].filter(Boolean).join('\\n');\n\n// URL\nconst urlMatch = textSources.match(/https?:\\/\\/[^\\s<>\"')]+/);\nif (!urlMatch) throw new Error('Ingen URL hittades i mailet.');\nconst url = urlMatch[0];\n\n// Titel: subject om det finns, annars URL\nlet title =\n  (typeof mail.subject === 'string' && mail.subject.trim()) ||\n  url;\n\n// Kategori (valfritt) fran [TAG] i subject\nlet category = 'Manuellt via e-post';\nconst tagMatch = title.match(/^\\[([^\\]]+)\\]\\s*/);\nif (tagMatch) {\n  category = tagMatch[1].trim();\n  title = title.replace(/^\\[[^\\]]+\\]\\s*/, '').trim();\n}\n\n// Datum\nconst date_added = new Date().toISOString().split('T')[0];\n\nreturn [{\n  json: { title, url, category, date_added, source: 'Curated Articles', added_via: 'gmail' }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "eb5941d4-86cf-4d67-8e23-74a4efb1042b",
+      "name": "Parse Email"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU",
+          "mode": "list",
+          "cachedResultName": "Länsstyrelsen Curated Articles",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Curated Articles",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU/edit#gid=0"
+        },
+        "options": {
+          "range": "A:G"
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [440, 0],
+      "id": "read-existing-urls",
+      "name": "Read Existing URLs",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OlbIZDcLgr5zQs8a",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dedupliceringslogik: kontrollera om URL redan finns i sheetet\nconst newArticle = $('Parse Email').first().json;\nconst existingRows = $input.all();\n\n// Extrahera alla befintliga URL:er\nconst existingUrls = existingRows\n  .map(row => (row.json.url || '').toLowerCase().trim())\n  .filter(url => url.length > 0);\n\nconst newUrl = (newArticle.url || '').toLowerCase().trim();\n\n// Kontrollera om URL redan finns\nif (existingUrls.includes(newUrl)) {\n  // URL finns redan - hoppa over\n  console.log('Dubblett hittad, hoppar over:', newUrl);\n  return [];\n}\n\n// URL ar ny - skicka vidare for att laggas till\nreturn [{ json: newArticle }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "id": "check-duplicate",
+      "name": "Check Duplicate"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU",
+          "mode": "list",
+          "cachedResultName": "Länsstyrelsen Curated Articles",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Curated Articles",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "title": "={{ $json.title }}",
+            "url": "={{ $json.url }}",
+            "category": "={{ $json.category }}",
+            "date_added": "={{ $json.date_added }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {"id": "url", "displayName": "url", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "title", "displayName": "title", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "category", "displayName": "category", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "date_added", "displayName": "date_added", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "date_processed", "displayName": "date_processed", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "notes", "displayName": "notes", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true}
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [880, 0],
+      "id": "2eb5f4c0-b8d0-400e-b61b-fd29d755a4fa",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OlbIZDcLgr5zQs8a",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{"node": "Parse Email", "type": "main", "index": 0}]]
+    },
+    "Parse Email": {
+      "main": [[{"node": "Read Existing URLs", "type": "main", "index": 0}]]
+    },
+    "Read Existing URLs": {
+      "main": [[{"node": "Check Duplicate", "type": "main", "index": 0}]]
+    },
+    "Check Duplicate": {
+      "main": [[{"node": "Append row in sheet", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "name": "Civilt forsvar - Lagg till citat via Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "labels": ["Citat"],
+          "readStatus": "unread"
+        }
+      },
+      "id": "gmail-trigger-001",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrahera citat fran Gmail\n// Mail till: josefbengtson+citat@gmail.com\n// Format: Amnesrad = Kallan, Mailinnehall = citatet + eventuell URL\n\nconst email = $json;\n\n// VIKTIGT: Kontrollera att mailet skickades till +citat-adressen\nconst toAddresses = email.to || email.labelIds || '';\nconst toField = JSON.stringify(toAddresses).toLowerCase();\nconst deliveredTo = (email.headers?.['delivered-to'] || email.deliveredTo || '').toLowerCase();\nconst allRecipients = (toField + ' ' + deliveredTo).toLowerCase();\n\n// Kontrollera om mailet ar till +citat-adressen\nif (!allRecipients.includes('josefbengtson+citat@gmail.com') && \n    !allRecipients.includes('+citat')) {\n  // Returnera tom array for att hoppa over detta mail\n  return [];\n}\n\nconst subject = email.subject || '';\nconst body = (email.text || email.snippet || '').trim();\nconst from = email.from?.emailAddress || email.from || 'unknown';\n\n// Amnesraden ar kallan\nlet source = subject.trim() || 'Okand kalla';\n\n// Extrahera URL om den finns i mailet\nconst urlMatch = body.match(/(https?:\\/\\/[^\\s]+)/);\nconst url = urlMatch ? urlMatch[1] : '';\n\n// Rensa citatet fran eventuell URL\nlet quote = body.replace(/(https?:\\/\\/[^\\s]+)/g, '').trim();\n\n// Ta bort signatur om den finns\nquote = quote.split(/\\n--\\n|\\n___/)[0].trim();\nquote = quote.split(/\\nMed vanlig halsning|\\nVanliga halsningar|\\nMvh|\\nBest regards/i)[0].trim();\n\n// Ta bort tomma rader i borjan och slutet\nquote = quote.replace(/^\\n+|\\n+$/g, '').trim();\n\nreturn [{\n  json: {\n    quote: quote,\n    source: source,\n    url: url,\n    context: '',\n    date_added: new Date().toISOString().split('T')[0],\n    added_by: from\n  }\n}];"
+      },
+      "id": "parse-email-001",
+      "name": "Parse Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "sheetName": "Manual Quotes",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "quote": "={{ $json.quote }}",
+            "source": "={{ $json.source }}",
+            "url": "={{ $json.url }}",
+            "context": "={{ $json.context }}",
+            "date_added": "={{ $json.date_added }}",
+            "added_by": "={{ $json.added_by }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "sheets-append-001",
+      "name": "Add to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.1,
+      "position": [448, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse Email Content').first().json.added_by }}",
+        "subject": "Citat tillagt i nyhetsbrevet",
+        "message": "=Ditt citat har lagts till:\\n\\n\"{{ $('Parse Email Content').first().json.quote }}\"\\n\\nKalla: {{ $('Parse Email Content').first().json.source }}\\n\\nCitatet kommer att inkluderas i nasta veckas nyhetsbrev.\\n\\n/AI Insights-systemet",
+        "options": {}
+      },
+      "id": "confirm-email-001",
+      "name": "Send Confirmation",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [672, 300]
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{ "node": "Parse Email Content", "type": "main", "index": 0 }]]
+    },
+    "Parse Email Content": {
+      "main": [[{ "node": "Add to Google Sheet", "type": "main", "index": 0 }]]
+    },
+    "Add to Google Sheet": {
+      "main": [[{ "node": "Send Confirmation", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

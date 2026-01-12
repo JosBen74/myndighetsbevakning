@@ -1,0 +1,465 @@
+{
+  "name": "Veckorapport: Civilt försvar & AI",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lansstyrelsen-insights",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "81d80e32-ffc9-4570-b550-27782174ab24",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-656, 112],
+      "webhookId": "lansstyrelsen-insights"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "f1c811c3-9069-4dfb-94b3-b7e8100c3af1",
+      "name": "Schedule Trigger (Monday 8 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-656, 304]
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "id": "1e54ba65-b0da-4838-ae06-857ab48f5cd0",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [-448, 208]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst isWebhook = items.some(item => item.json.headers !== undefined);\nconst mode = isWebhook ? 'webhook' : 'scheduled';\n\nlet dateFrom, dateTo;\n\nif (isWebhook && items[0].json.body) {\n  const body = items[0].json.body;\n  dateFrom = body.dateFrom;\n  dateTo = body.dateTo;\n}\n\nif (!dateFrom || !dateTo) {\n  const now = new Date();\n  const sevenDaysAgo = new Date(now);\n  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n  \n  dateFrom = sevenDaysAgo.toISOString().split('T')[0];\n  dateTo = now.toISOString().split('T')[0];\n}\n\nconst testMode = isWebhook && items[0].json.body && items[0].json.body.mode === 'test';\nconst shouldSendEmail = !testMode;\n\nreturn [{\n  json: {\n    mode,\n    testMode,\n    shouldSendEmail,\n    dateFrom,\n    dateTo,\n    executionTime: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "294ef54b-226f-4ad2-81d7-caa962b163a1",
+      "name": "Detect Execution Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-224, 208]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://josben.app.n8n.cloud/webhook/foi-reports",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "2726eb1b-9428-43fe-8c29-78848ce50799",
+      "name": "Fetch FOI Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const foiResponse = $json;\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nlet allReports = [];\n\ntry {\n  if (foiResponse.success && Array.isArray(foiResponse.reports)) {\n    allReports = foiResponse.reports\n      .filter(report => {\n        if (!report.date) return false;\n        const reportDate = new Date(report.date);\n        return reportDate >= dateFrom && reportDate <= dateTo;\n      })\n      .slice(0, 10)\n      .map(report => ({\n        source: 'FOI',\n        type: 'report',\n        title: report.title || `Rapport ${report.reportNo}`,\n        date: report.date,\n        url: report.url,\n        excerpt: report.title || report.reportNo\n      }));\n  }\n} catch (e) {\n  console.error('Error parsing FOI:', e);\n}\n\nreturn allReports.length > 0 ? allReports.map(r => ({ json: r })) : [{ json: { source: 'FOI', isEmpty: true } }];"
+      },
+      "id": "ba6d4b1c-ba75-46e6-9b30-5dba2cf32913",
+      "name": "Parse FOI Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 0]
+    },
+    {
+      "parameters": {
+        "url": "https://www.mcf.se/",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "mcf-fetch-001",
+      "name": "Fetch MCF News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [0, 150]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse MCF startsida for nyheter\nconst html = $json.data || '';\nconst items = [];\n\ntry {\n  // Sok efter nyheter/aktuellt-sektioner pa sidan\n  // MCF har typiskt nyheter i article-taggar eller nyhet-klasser\n  const newsMatches = html.matchAll(/<a[^>]*href=\"([^\"]*(?:nyhet|aktuellt|pressmeddelande)[^\"]*)\">([^<]+)<\\/a>/gi);\n  \n  for (const match of newsMatches) {\n    const url = match[1].startsWith('http') ? match[1] : `https://www.mcf.se${match[1]}`;\n    const title = match[2].trim();\n    \n    if (title && title.length > 10) {\n      items.push({\n        source: 'MCF',\n        type: 'news',\n        title: title,\n        url: url,\n        date: new Date().toISOString().split('T')[0],\n        excerpt: title\n      });\n    }\n  }\n  \n  // Fallback: hitta artiklar pa andra satt\n  if (items.length === 0) {\n    const articleMatches = html.matchAll(/<article[^>]*>([\\s\\S]*?)<\\/article>/gi);\n    for (const match of articleMatches) {\n      const content = match[1];\n      const titleMatch = content.match(/<h[23][^>]*>([^<]+)<\\/h[23]>/);\n      const linkMatch = content.match(/<a[^>]*href=\"([^\"]+)\"/);\n      \n      if (titleMatch) {\n        items.push({\n          source: 'MCF',\n          type: 'news',\n          title: titleMatch[1].trim(),\n          url: linkMatch ? (linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.mcf.se${linkMatch[1]}`) : 'https://www.mcf.se',\n          date: new Date().toISOString().split('T')[0],\n          excerpt: titleMatch[1].trim()\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('MCF parse error:', e);\n}\n\n// Returnera max 5 nyheter\nconst limited = items.slice(0, 5);\nreturn limited.length > 0 ? limited.map(i => ({ json: i })) : [{ json: { source: 'MCF', isEmpty: true } }];"
+      },
+      "id": "mcf-parse-001",
+      "name": "Parse MCF News",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 150]
+    },
+    {
+      "parameters": {
+        "url": "https://carlheath.se/feed/",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "92a640f7-ca08-4a12-aeb5-b9bc66a2b91a",
+      "name": "Fetch Carl Heath RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rssXml = $json.data;\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst posts = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch && pubDateMatch) {\n      const pubDate = new Date(pubDateMatch[1]);\n      \n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').substring(0, 300);\n        \n        posts.push({\n          source: 'Carl Heath',\n          type: 'blog',\n          title: titleMatch[1],\n          url: linkMatch[1],\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('RSS parse error:', e);\n}\n\nreturn posts.length > 0 ? posts.map(p => ({ json: p })) : [{ json: { source: 'Carl Heath', isEmpty: true } }];"
+      },
+      "id": "98032ee0-9b48-441c-93b2-0215596e3c27",
+      "name": "Parse Carl Heath RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://www.oneusefulthing.org/feed",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "c3e2bb06-5cab-4232-82d6-ed13676e7ed8",
+      "name": "Fetch One Useful Thing RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [0, 450]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rssXml = $json.data;\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst posts = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch && pubDateMatch) {\n      const pubDate = new Date(pubDateMatch[1]);\n      \n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').substring(0, 300);\n        \n        posts.push({\n          source: 'One Useful Thing',\n          type: 'blog',\n          title: titleMatch[1],\n          url: linkMatch[1],\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('RSS parse error:', e);\n}\n\nreturn posts.length > 0 ? posts.map(p => ({ json: p })) : [{ json: { source: 'One Useful Thing', isEmpty: true } }];"
+      },
+      "id": "90621f83-a002-4248-82d3-0b088cc69630",
+      "name": "Parse One Useful Thing RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 450]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "sheetName": "Curated Articles",
+        "options": {
+          "range": "A2:G1000"
+        }
+      },
+      "id": "b9b341a3-c408-4b3c-8d60-c7f5f6304303",
+      "name": "Fetch Curated Articles",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.1,
+      "position": [0, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst filteredItems = [];\n\nitems.forEach(item => {\n  const row = item.json;\n  if (!row.url || !row.title) return;\n\n  let dateAdded;\n  try {\n    dateAdded = new Date(row.date_added);\n  } catch (e) {\n    return;\n  }\n\n  if (dateAdded >= dateFrom && dateAdded <= dateTo) {\n    filteredItems.push({\n      json: {\n        url: row.url.trim(),\n        title: row.title.trim(),\n        category: row.category || '',\n        dateAdded: row.date_added,\n        sheetRowIndex: item.index + 2\n      }\n    });\n  }\n});\n\nreturn filteredItems.length > 0\n  ? filteredItems\n  : [{ json: { source: 'Curated Articles', isEmpty: true } }];"
+      },
+      "id": "cd4a98b3-69ab-41f0-a4f5-353ab6c3f295",
+      "name": "Filter Active URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 600]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://r.jina.ai/{{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "cf85a059-3166-44a0-8f6a-8c30eeaf0b18",
+      "name": "Fetch Article Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [448, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst originalItems = $('Filter Active URLs').all();\nconst parsedArticles = [];\n\nitems.forEach((item, idx) => {\n  if (item.json.isEmpty) {\n    parsedArticles.push(item);\n    return;\n  }\n\n  const originalData = originalItems[idx]?.json || {};\n\n  if (item.error || !item.json) {\n    parsedArticles.push({\n      json: {\n        source: 'Curated Articles',\n        type: 'curated',\n        title: originalData.title || 'Utan titel',\n        url: originalData.url || '',\n        date: originalData.dateAdded || '',\n        category: originalData.category || '',\n        excerpt: '[Artikelinnehall kunde inte hamtas]',\n        error: true\n      }\n    });\n    return;\n  }\n\n  let content = '';\n  let excerpt = '';\n\n  try {\n    if (item.json.data && item.json.data.content) {\n      content = item.json.data.content;\n    } else if (typeof item.json === 'string') {\n      content = item.json;\n    } else if (item.json.content) {\n      content = item.json.content;\n    }\n\n    excerpt = content\n      .replace(/#+\\s/g, '')\n      .replace(/\\[([^\\]]+)\\]\\([^\\)]+\\)/g, '$1')\n      .replace(/\\*\\*/g, '')\n      .replace(/\\n\\n+/g, ' ')\n      .trim()\n      .substring(0, 500);\n\n    if (content.length > 500) excerpt += '...';\n  } catch (e) {\n    excerpt = '[Tolkningsfel]';\n  }\n\n  parsedArticles.push({\n    json: {\n      source: 'Curated Articles',\n      type: 'curated',\n      title: originalData.title || 'Utan titel',\n      url: originalData.url || '',\n      date: originalData.dateAdded || '',\n      category: originalData.category || '',\n      excerpt: excerpt || content.substring(0, 500),\n      fullContent: content.substring(0, 2000),\n      error: false\n    }\n  });\n});\n\nreturn parsedArticles;"
+      },
+      "id": "4bb0ee81-212f-4833-bb2c-55c5382c407a",
+      "name": "Parse Curated Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [672, 600]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "sheetName": "Manual Quotes",
+        "options": {
+          "range": "A2:E1000"
+        }
+      },
+      "id": "quotes-sheet-001",
+      "name": "Fetch Manual Quotes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.1,
+      "position": [0, 750]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filtrera citat fran Google Sheet inom datumintervallet\n// Hanterar olika kolumnnamn (svenska/engelska, versaler/gemener)\nconst items = $input.all();\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst quotes = [];\n\n// Debug: logga forsta raden for att se kolumnnamn\nif (items.length > 0) {\n  console.log('Kolumner i forsta raden:', Object.keys(items[0].json));\n}\n\nitems.forEach(item => {\n  const row = item.json;\n  \n  // Flexibel kolumnmatchning (hanterar Quote/quote/Citat etc)\n  const quoteVal = row.quote || row.Quote || row.citat || row.Citat || row.text || row.Text || '';\n  const sourceVal = row.source || row.Source || row.kalla || row.Kalla || '';\n  const contextVal = row.context || row.Context || row.kontext || row.Kontext || '';\n  const urlVal = row.url || row.URL || row.Url || row.link || row.Link || '';\n  const dateVal = row.date_added || row.dateAdded || row.date || row.Date || row.datum || row.Datum || '';\n  \n  // Skippa om inget citat eller kalla finns\n  if (!quoteVal || !sourceVal) {\n    console.log('Hoppar over rad - saknar citat eller kalla:', row);\n    return;\n  }\n  \n  let dateAdded;\n  try {\n    if (dateVal) {\n      dateAdded = new Date(dateVal);\n      // Kontrollera om datumet ar giltigt\n      if (isNaN(dateAdded.getTime())) {\n        console.log('Ogiltigt datum, anvander idag:', dateVal);\n        dateAdded = new Date();\n      }\n    } else {\n      // Inget datum angivet - anvand dagens datum\n      dateAdded = new Date();\n    }\n  } catch (e) {\n    dateAdded = new Date();\n  }\n  \n  // Kontrollera datumintervall\n  if (dateAdded >= dateFrom && dateAdded <= dateTo) {\n    quotes.push({\n      json: {\n        type: 'manual_quote',\n        quote: quoteVal.trim(),\n        source: sourceVal.trim(),\n        context: contextVal || '',\n        url: urlVal || '',\n        dateAdded: dateAdded.toISOString().split('T')[0]\n      }\n    });\n    console.log('Citat inkluderat:', sourceVal);\n  } else {\n    console.log('Citat utanfor datumintervall:', sourceVal, 'Datum:', dateAdded, 'Intervall:', dateFrom, '-', dateTo);\n  }\n});\n\nconsole.log('Totalt antal citat som passerade filtret:', quotes.length);\n\nreturn quotes.length > 0 ? quotes : [{ json: { type: 'manual_quote', isEmpty: true } }];"
+      },
+      "id": "quotes-parse-001",
+      "name": "Filter Manual Quotes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 750]
+    },
+    {
+      "parameters": {
+        "numberInputs": 6
+      },
+      "id": "333cfa9f-3593-44fb-8c6d-bcf77bcd3ab2",
+      "name": "Merge All Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [896, 350]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\n\nconst response = {\n  success: true,\n  executionTime: new Date().toISOString(),\n  sources: {\n    foi: [],\n    mcf: [],\n    carlHeath: [],\n    oneUsefulThing: [],\n    curatedArticles: [],\n    manualQuotes: []\n  },\n  totalItems: 0\n};\n\nallItems.forEach(item => {\n  if (item.json.isEmpty) return;\n\n  if (item.json.source === 'FOI') {\n    response.sources.foi.push(item.json);\n  } else if (item.json.source === 'MCF') {\n    response.sources.mcf.push(item.json);\n  } else if (item.json.source === 'Carl Heath') {\n    response.sources.carlHeath.push(item.json);\n  } else if (item.json.source === 'One Useful Thing') {\n    response.sources.oneUsefulThing.push(item.json);\n  } else if (item.json.source === 'Curated Articles') {\n    response.sources.curatedArticles.push(item.json);\n  } else if (item.json.type === 'manual_quote') {\n    response.sources.manualQuotes.push(item.json);\n  }\n});\n\nresponse.totalItems = Object.values(response.sources).flat().length;\n\nreturn [{ json: response }];"
+      },
+      "id": "be2cec16-ee4e-47a3-82ab-21e8b1032f21",
+      "name": "Aggregate All Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1104, 350]
+    },
+    {
+      "parameters": {
+        "jsCode": "const aggregatedData = $json;\nconst config = $('Detect Execution Mode').first().json;\n\nlet contentSummary = `Datumintervall: ${config.dateFrom} till ${config.dateTo}\\n\\n`;\n\n// FOI + MCF (ny kombinerad sektion)\ncontentSummary += `FOI RAPPORTER (${aggregatedData.sources.foi.length} dokument):\\n`;\naggregatedData.sources.foi.forEach((item, i) => {\n  contentSummary += `${i + 1}. ${item.title}\\n` +\n                    `   Datum: ${item.date}\\n` +\n                    (item.url ? `   URL: ${item.url}\\n` : '') +\n                    `\\n`;\n});\n\ncontentSummary += `\\nMCF NYHETER (${aggregatedData.sources.mcf.length} nyheter):\\n`;\naggregatedData.sources.mcf.forEach((item, i) => {\n  contentSummary += `${i + 1}. ${item.title}\\n` +\n                    `   URL: ${item.url}\\n\\n`;\n});\n\ncontentSummary += `\\nCARL HEATH BLOGG (${aggregatedData.sources.carlHeath.length} inlagg):\\n`;\naggregatedData.sources.carlHeath.forEach((item, i) => {\n  contentSummary += `${i + 1}. ${item.title}\\n` +\n                    `   Datum: ${item.date}\\n` +\n                    `   URL: ${item.url}\\n` +\n                    `   Utdrag: ${item.excerpt}\\n\\n`;\n});\n\ncontentSummary += `\\nONE USEFUL THING (${aggregatedData.sources.oneUsefulThing.length} inlagg):\\n`;\naggregatedData.sources.oneUsefulThing.forEach((item, i) => {\n  contentSummary += `${i + 1}. ${item.title}\\n` +\n                    `   Datum: ${item.date}\\n` +\n                    `   URL: ${item.url}\\n` +\n                    `   Utdrag: ${item.excerpt}\\n\\n`;\n});\n\ncontentSummary += `\\nKURATERADE ARTIKLAR (${aggregatedData.sources.curatedArticles.length} artiklar):\\n`;\naggregatedData.sources.curatedArticles.forEach((item, i) => {\n  contentSummary += `${i + 1}. ${item.title}\\n` +\n                    `   Datum tillagd: ${item.date}\\n` +\n                    `   URL: ${item.url}\\n` +\n                    (item.category ? `   Kategori: ${item.category}\\n` : '') +\n                    `   Innehall: ${item.excerpt}\\n\\n`;\n});\n\n// Manuellt tillagda citat\ncontentSummary += `\\nMANUELLT TILLAGDA CITAT (${aggregatedData.sources.manualQuotes.length} st):\\n`;\naggregatedData.sources.manualQuotes.forEach((item, i) => {\n  contentSummary += `${i + 1}. \"${item.quote}\"\\n` +\n                    `   Kalla: ${item.source}\\n` +\n                    (item.context ? `   Kontext: ${item.context}\\n` : '') +\n                    (item.url ? `   URL: ${item.url}\\n` : '') +\n                    `\\n`;\n});\n\nconst systemPrompt = `Du ar en strategisk analytiker for Lansstyrelsen i Vastra Gotaland med expertis inom civilforsvar, krishantering och AI-teknologi.\n\nFokusomraden:\n- Civilforsvar och totalforsvar\n- AI-sakerhet och robusthet\n- Krishantering och samhallsskydd\n- Desinformation och informationssakerhet\n- Kritisk infrastruktur\n- Beredskap och resiliens\n\nViktigt:\n- Anvand endast den information som finns i underlaget.\n- Hitta inte pa nya rapporter eller kallor.\n- Inkludera alla manuellt tillagda citat i din output.\n\nReturnera ditt svar som ENBART ett JSON-objekt (ingen annan text, inga markdown-block) med foljande struktur:\n\n{\n  \"executiveSummary\": \"Kort sammanfattning (3-5 meningar)\",\n  \"curatedArticleInsights\": [\n    {\n      \"title\": \"Artikeltitel\",\n      \"url\": \"URL\",\n      \"category\": \"Kategori\",\n      \"keyTakeaway\": \"1-2 meningar om huvudpoangen\",\n      \"actionableInsight\": \"Konkret insikt for Lansstyrelsen\"\n    }\n  ],\n  \"keyQuotes\": [\n    {\n      \"quote\": \"Citat\",\n      \"source\": \"Namn pa kallan\",\n      \"url\": \"URL till artikeln eller kallans webbsida\",\n      \"context\": \"Kontext\",\n      \"isManual\": true/false\n    }\n  ],\n  \"foiAndMcfReports\": [\n    {\n      \"title\": \"Rapporttitel\",\n      \"source\": \"FOI eller MCF\",\n      \"date\": \"Datum\",\n      \"url\": \"URL\",\n      \"shortNote\": \"1-2 meningar\"\n    }\n  ],\n  \"themes\": [\n    {\n      \"title\": \"Tema titel\",\n      \"insight\": \"Insikt om temat\",\n      \"relevanceForLansstyrelsen\": \"Varfor detta ar relevant\"\n    }\n  ],\n  \"recommendations\": [\n    \"Atgard 1\",\n    \"Atgard 2\"\n  ]\n}`;\n\nconst userPrompt = `Analysera foljande innehall och generera insikter:\\n\\n${contentSummary}`;\n\nreturn [{\n  json: {\n    sourceData: aggregatedData,\n    claudeRequest: {\n      model: 'claude-sonnet-4-20250514',\n      max_tokens: 4096,\n      system: systemPrompt,\n      messages: [\n        {\n          role: 'user',\n          content: userPrompt\n        }\n      ]\n    }\n  }\n}];"
+      },
+      "id": "bddf4bb2-10dc-437f-aa40-fd448c30c6aa",
+      "name": "Prepare Synthesis Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1328, 350]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeRequest }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "9a00d944-bbd3-4bbd-8657-a25acb348bec",
+      "name": "Call Synthesis AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1552, 350]
+    },
+    {
+      "parameters": {
+        "jsCode": "const claudeResponse = $json;\nconst sourceData = $('Prepare Synthesis Request').first().json.sourceData;\n\ntry {\n  const aiText = claudeResponse.content[0].text.trim();\n  \n  let cleanText = aiText;\n  if (cleanText.startsWith('```')) {\n    cleanText = cleanText.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  \n  let insights;\n  try {\n    insights = JSON.parse(cleanText);\n  } catch (parseError) {\n    const jsonMatch = cleanText.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      try {\n        insights = JSON.parse(jsonMatch[0]);\n      } catch (e) {\n        insights = {\n          executiveSummary: 'Kunde inte parsa AI-svaret korrekt.',\n          themes: [],\n          keyQuotes: [],\n          recommendations: [],\n          curatedArticleInsights: [],\n          foiAndMcfReports: []\n        };\n      }\n    } else {\n      insights = {\n        executiveSummary: cleanText.substring(0, 500),\n        themes: [],\n        keyQuotes: [],\n        recommendations: [],\n        curatedArticleInsights: [],\n        foiAndMcfReports: []\n      };\n    }\n  }\n\n  // Sakerstall att alla falt finns\n  insights.themes = insights.themes || [];\n  insights.keyQuotes = insights.keyQuotes || [];\n  insights.recommendations = insights.recommendations || [];\n  insights.curatedArticleInsights = insights.curatedArticleInsights || [];\n  insights.foiAndMcfReports = insights.foiAndMcfReports || [];\n\n  return [{\n    json: {\n      success: true,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources,\n      aiInsights: insights,\n      metadata: {\n        model: 'claude-sonnet-4-20250514',\n        tokensUsed: claudeResponse.usage\n      }\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      success: false,\n      error: error.message,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources,\n      aiInsights: {\n        executiveSummary: 'Fel vid AI-analys: ' + error.message,\n        themes: [],\n        keyQuotes: [],\n        recommendations: [],\n        curatedArticleInsights: [],\n        foiAndMcfReports: []\n      }\n    }\n  }];\n}"
+      },
+      "id": "7c15ad0f-b969-4a8d-90e0-d9c0c74f2c6c",
+      "name": "Parse Synthesis Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1776, 350]
+    },
+    {
+      "parameters": {
+        "jsCode": "// NY MAILSTRUKTUR v8:\n// 1. Sammanfattning\n// 2. Kurerade artiklar\n// 3. Viktiga citat\n// 4. Nyheter fran FOI och MCF\n// 5. Identifierade teman\n// 6. Rekommenderade atgarder\n\nconst data = $json;\nconst insights = data.aiInsights || {};\nconst config = $('Detect Execution Mode').first().json;\n\nconst executiveSummary = insights.executiveSummary || 'Ingen sammanfattning tillganglig.';\nconst curatedArticles = insights.curatedArticleInsights || [];\nconst quotes = insights.keyQuotes || [];\nconst foiMcfReports = insights.foiAndMcfReports || [];\nconst themes = insights.themes || [];\nconst recommendations = insights.recommendations || [];\n\nlet html = `<!DOCTYPE html>\n<html>\n<head>\n    <meta charset=\"UTF-8\">\n    <style>\n        body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }\n        .container { background-color: white; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }\n        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }\n        h2 { color: #34495e; margin-top: 30px; border-bottom: 2px solid #95a5a6; padding-bottom: 5px; }\n        .summary { background-color: #ecf0f1; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #3498db; }\n        .curated-article { background-color: #e8eaf6; padding: 15px; margin: 15px 0; border-left: 4px solid #3f51b5; border-radius: 4px; }\n        .quote { background-color: #fff3e0; padding: 15px; margin: 10px 0; border-left: 4px solid #ff9800; font-style: italic; border-radius: 4px; }\n        .quote.manual { border-left-color: #e91e63; background-color: #fce4ec; }\n        .foi-mcf-report { background-color: #e8f5e9; padding: 15px; margin: 10px 0; border-left: 4px solid #4caf50; border-radius: 4px; }\n        .theme { background-color: #f3e5f5; padding: 15px; margin: 15px 0; border-left: 4px solid #9c27b0; border-radius: 4px; }\n        .recommendation { background-color: #e3f2fd; padding: 10px 15px; margin: 10px 0; border-left: 4px solid #2196f3; border-radius: 4px; }\n        .category-tag { background-color: #c5cae9; padding: 3px 10px; margin-right: 5px; border-radius: 12px; font-size: 0.85em; display: inline-block; }\n        .source-tag { background-color: #ffecb3; padding: 2px 8px; border-radius: 8px; font-size: 0.8em; }\n        a { color: #3498db; text-decoration: none; }\n        a:hover { text-decoration: underline; }\n        .empty-section { color: #7f8c8d; font-style: italic; padding: 10px 0; }\n    </style>\n</head>\n<body>\n<div class=\"container\">\n    <h1>Civilt forsvar & AI - Veckonytt</h1>\n    <p><strong>Period:</strong> ${config.dateFrom} till ${config.dateTo}</p>\n`;\n\n// 1. SAMMANFATTNING\nhtml += `<div class=\"summary\">\n    <h2>1. Sammanfattning</h2>\n    <p>${executiveSummary}</p>\n</div>`;\n\n// 2. KURERADE ARTIKLAR\nhtml += `<h2>2. Kurerade artiklar (${curatedArticles.length})</h2>`;\nif (curatedArticles.length > 0) {\n    curatedArticles.forEach(article => {\n        html += `<div class=\"curated-article\">`;\n        html += `<h3>${article.title || 'Utan titel'}</h3>`;\n        if (article.category) {\n            html += `<p><span class=\"category-tag\">${article.category}</span></p>`;\n        }\n        html += `<p><strong>Huvudpoang:</strong> ${article.keyTakeaway || 'Ingen'}</p>`;\n        html += `<p><strong>Relevans:</strong> ${article.actionableInsight || 'Ingen'}</p>`;\n        if (article.url) {\n            html += `<p><a href=\"${article.url}\" target=\"_blank\">Las artikel</a></p>`;\n        }\n        html += `</div>`;\n    });\n} else {\n    html += `<p class=\"empty-section\">Inga kurerade artiklar denna vecka.</p>`;\n}\n\n// 3. VIKTIGA CITAT\nhtml += `<h2>3. Viktiga citat (${quotes.length})</h2>`;\nif (quotes.length > 0) {\n    quotes.forEach(quote => {\n        const isManual = quote.isManual === true;\n        html += `<div class=\"quote${isManual ? ' manual' : ''}\">`;\n        html += `<p>\"${quote.quote || ''}\"</p>`;\n        // Visa kalla som klickbar URL-lank\n        if (quote.url) {\n            html += `<p><strong>K&auml;lla:</strong> <a href=\"${quote.url}\" target=\"_blank\">${quote.source || quote.url}</a>`;\n        } else {\n            html += `<p><strong>K&auml;lla:</strong> ${quote.source || 'Ok&auml;nd'}`;\n        }\n        if (isManual) html += ` <span class=\"source-tag\">Manuellt tillagt</span>`;\n        html += `</p>`;\n        if (quote.context) html += `<p><strong>Kontext:</strong> ${quote.context}</p>`;\n        html += `</div>`;\n    });\n} else {\n    html += `<p class=\"empty-section\">Inga citat denna vecka.</p>`;\n}\n\n// 4. NYHETER FRAN FOI OCH MCF\nhtml += `<h2>4. Nyheter fran FOI och MCF (${foiMcfReports.length})</h2>`;\nif (foiMcfReports.length > 0) {\n    foiMcfReports.forEach(report => {\n        html += `<div class=\"foi-mcf-report\">`;\n        html += `<h3>${report.title || 'Utan titel'}</h3>`;\n        html += `<p><span class=\"source-tag\">${report.source || 'FOI/MCF'}</span> | ${report.date || 'Okant datum'}</p>`;\n        if (report.shortNote) html += `<p>${report.shortNote}</p>`;\n        if (report.url) html += `<p><a href=\"${report.url}\" target=\"_blank\">Las mer</a></p>`;\n        html += `</div>`;\n    });\n} else {\n    html += `<p class=\"empty-section\">Inga rapporter fran FOI eller MCF denna vecka.</p>`;\n}\n\n// 5. IDENTIFIERADE TEMAN\nhtml += `<h2>5. Identifierade teman (${themes.length})</h2>`;\nif (themes.length > 0) {\n    themes.forEach(theme => {\n        html += `<div class=\"theme\">`;\n        html += `<h3>${theme.title || 'Utan titel'}</h3>`;\n        html += `<p><strong>Insikt:</strong> ${theme.insight || ''}</p>`;\n        html += `<p><strong>Relevans for Lansstyrelsen:</strong> ${theme.relevanceForLansstyrelsen || ''}</p>`;\n        html += `</div>`;\n    });\n} else {\n    html += `<p class=\"empty-section\">Inga teman identifierade denna vecka.</p>`;\n}\n\n// 6. REKOMMENDERADE ATGARDER\nhtml += `<h2>6. Rekommenderade atgarder (${recommendations.length})</h2>`;\nif (recommendations.length > 0) {\n    html += `<ul>`;\n    recommendations.forEach(rec => {\n        html += `<li class=\"recommendation\">${rec}</li>`;\n    });\n    html += `</ul>`;\n} else {\n    html += `<p class=\"empty-section\">Inga specifika atgarder rekommenderade denna vecka.</p>`;\n}\n\n// Footer\nhtml += `\n    <hr style=\"margin-top: 40px; border: none; border-top: 1px solid #bdc3c7;\">\n    <p style=\"color: #7f8c8d; font-size: 0.9em;\">\n        <em>Genererat automatiskt av Lansstyrelsens AI Insights-system v8.</em><br>\n        Genererad: ${new Date().toLocaleString('sv-SE')}<br>\n        Modell: Claude Sonnet 4\n    </p>\n</div>\n</body>\n</html>`;\n\nreturn [{ \n  json: { \n    html: html, \n    subject: `Civilt forsvar & AI - ${config.dateFrom} till ${config.dateTo}`,\n    shouldSendEmail: config.shouldSendEmail,\n    debug: {\n      curatedCount: curatedArticles.length,\n      quotesCount: quotes.length,\n      foiMcfCount: foiMcfReports.length,\n      themesCount: themes.length,\n      recommendationsCount: recommendations.length\n    }\n  } \n}];"
+      },
+      "id": "1950c1d2-94bb-4ab2-8b34-8b72a5ace94c",
+      "name": "Generate HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 350]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "leftValue": "={{ $json.shouldSendEmail }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "89c73b6d-db3d-4aa0-a6a1-64d1ef68cd91",
+      "name": "Should Send Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2224, 350]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "4c46b7d4-664a-47d1-8610-c03781362b9a",
+      "name": "Return JSON Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [2448, 250]
+    },
+    {
+      "parameters": {
+        "sendTo": "josef.bengtson@lansstyrelsen.se",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "d3ca9632-d8da-481f-806d-f5aed964fc42",
+      "name": "Send Weekly Report Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2448, 450]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-656, 512],
+      "id": "a484b17f-6900-4327-bd73-ecb49aa6e9e4",
+      "name": "When clicking 'Execute workflow'"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{ "node": "Merge Triggers", "type": "main", "index": 0 }]]
+    },
+    "Schedule Trigger (Monday 8 AM)": {
+      "main": [[{ "node": "Merge Triggers", "type": "main", "index": 1 }]]
+    },
+    "Merge Triggers": {
+      "main": [[{ "node": "Detect Execution Mode", "type": "main", "index": 0 }]]
+    },
+    "Detect Execution Mode": {
+      "main": [[
+        { "node": "Fetch FOI Reports", "type": "main", "index": 0 },
+        { "node": "Fetch MCF News", "type": "main", "index": 0 },
+        { "node": "Fetch Carl Heath RSS", "type": "main", "index": 0 },
+        { "node": "Fetch One Useful Thing RSS", "type": "main", "index": 0 },
+        { "node": "Fetch Curated Articles", "type": "main", "index": 0 },
+        { "node": "Fetch Manual Quotes", "type": "main", "index": 0 }
+      ]]
+    },
+    "Fetch FOI Reports": {
+      "main": [[{ "node": "Parse FOI Results", "type": "main", "index": 0 }]]
+    },
+    "Parse FOI Results": {
+      "main": [[{ "node": "Merge All Sources", "type": "main", "index": 0 }]]
+    },
+    "Fetch MCF News": {
+      "main": [[{ "node": "Parse MCF News", "type": "main", "index": 0 }]]
+    },
+    "Parse MCF News": {
+      "main": [[{ "node": "Merge All Sources", "type": "main", "index": 1 }]]
+    },
+    "Fetch Carl Heath RSS": {
+      "main": [[{ "node": "Parse Carl Heath RSS", "type": "main", "index": 0 }]]
+    },
+    "Parse Carl Heath RSS": {
+      "main": [[{ "node": "Merge All Sources", "type": "main", "index": 2 }]]
+    },
+    "Fetch One Useful Thing RSS": {
+      "main": [[{ "node": "Parse One Useful Thing RSS", "type": "main", "index": 0 }]]
+    },
+    "Parse One Useful Thing RSS": {
+      "main": [[{ "node": "Merge All Sources", "type": "main", "index": 3 }]]
+    },
+    "Fetch Curated Articles": {
+      "main": [[{ "node": "Filter Active URLs", "type": "main", "index": 0 }]]
+    },
+    "Filter Active URLs": {
+      "main": [[{ "node": "Fetch Article Content", "type": "main", "index": 0 }]]
+    },
+    "Fetch Article Content": {
+      "main": [[{ "node": "Parse Curated Articles", "type": "main", "index": 0 }]]
+    },
+    "Parse Curated Articles": {
+      "main": [[{ "node": "Merge All Sources", "type": "main", "index": 4 }]]
+    },
+    "Fetch Manual Quotes": {
+      "main": [[{ "node": "Filter Manual Quotes", "type": "main", "index": 0 }]]
+    },
+    "Filter Manual Quotes": {
+      "main": [[{ "node": "Merge All Sources", "type": "main", "index": 5 }]]
+    },
+    "Merge All Sources": {
+      "main": [[{ "node": "Aggregate All Results", "type": "main", "index": 0 }]]
+    },
+    "Aggregate All Results": {
+      "main": [[{ "node": "Prepare Synthesis Request", "type": "main", "index": 0 }]]
+    },
+    "Prepare Synthesis Request": {
+      "main": [[{ "node": "Call Synthesis AI", "type": "main", "index": 0 }]]
+    },
+    "Call Synthesis AI": {
+      "main": [[{ "node": "Parse Synthesis Response", "type": "main", "index": 0 }]]
+    },
+    "Parse Synthesis Response": {
+      "main": [[{ "node": "Generate HTML Email", "type": "main", "index": 0 }]]
+    },
+    "Generate HTML Email": {
+      "main": [[{ "node": "Should Send Email?", "type": "main", "index": 0 }]]
+    },
+    "Should Send Email?": {
+      "main": [
+        [{ "node": "Send Weekly Report Email", "type": "main", "index": 0 }],
+        [{ "node": "Return JSON Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Merge Triggers", "type": "main", "index": 2 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

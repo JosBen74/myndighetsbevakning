@@ -26,3 +26,8 @@ Thumbs.db
 # Secrets - never commit API keys
 **/credentials.json
 **/token.json
+
+# Valbevakning — lokala hemligheter/backuper committas aldrig
+valbevakning-2026/secrets.local.json
+secrets.local.json
+workflows/*.backup*

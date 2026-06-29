@@ -1,0 +1,2720 @@
+{
+  "id": "u3TeQMCv8vBTpP92",
+  "name": "Valbevakning 2026 — länsstyrelsernas valorganisationer",
+  "active": true,
+  "activeVersionId": "afeb202d-2ea5-458e-9c7e-4a977cacb89c",
+  "isArchived": false,
+  "createdAt": "2026-04-27T07:07:24.774Z",
+  "updatedAt": "2026-04-27T10:14:13.495Z",
+  "nodes": [
+    {
+      "parameters": {
+        "multipleMethods": false,
+        "httpMethod": "POST",
+        "path": "valbevakning-2026",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "webhookNotice": "",
+        "options": {}
+      },
+      "id": "e3a815d7-c4f9-45a3-841a-bf16bc9a8d96",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -656,
+        112
+      ],
+      "webhookId": "valbevakning-2026"
+    },
+    {
+      "parameters": {
+        "notice": "",
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "notice": "",
+              "expression": "30 19 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "1b59070a-2b01-4cf4-b68e-ed669dc5e8ca",
+      "name": "Schedule Trigger (Sunday 19:30)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -656,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      },
+      "id": "09b20a47-a604-40b5-81fa-157b0ca76288",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -448,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Detect Execution Mode (Val 2026) — lägger till dagligt intensivläge.\n// Lägen via webhook-body.mode: 'test' | 'export-json' | 'daily' (annars veckovis/schemalagt).\n// 'daily' = 24h-fönster + radar-format i HTML (config.dailyMode). Behåller dateFrom/dateTo-override.\nconst items = $input.all();\n\nconst isWebhook = items.some(item => item.json.headers !== undefined);\nconst mode = isWebhook ? 'webhook' : 'scheduled';\nconst body = (isWebhook && items[0].json.body) ? items[0].json.body : {};\n\nconst dailyMode = body.mode === 'daily' || body.mode === 'dagligt';\n\nlet dateFrom = body.dateFrom;\nlet dateTo = body.dateTo;\n\nif (!dateFrom || !dateTo) {\n  const now = new Date();\n  const back = new Date(now);\n  back.setDate(back.getDate() - (dailyMode ? 1 : 7));  // dagligt = 24h, annars 7 dagar\n  dateFrom = back.toISOString().split('T')[0];\n  dateTo = now.toISOString().split('T')[0];\n}\n\nconst testMode = body.mode === 'test';\nconst exportMode = body.mode === 'export-json';\nconst shouldSendEmail = !testMode && !exportMode;\nconst modelOverride = (typeof body.model === 'string') ? body.model : undefined;\n\nreturn [{\n  json: {\n    mode,\n    testMode,\n    exportMode,\n    dailyMode,\n    shouldSendEmail,\n    modelOverride,\n    dateFrom,\n    dateTo,\n    executionTime: new Date().toISOString(),\n  },\n}];\n",
+        "notice": ""
+      },
+      "id": "800cb89e-ce52-47b7-a279-ac9df535070a",
+      "name": "Detect Execution Mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "POST",
+        "url": "https://josben.app.n8n.cloud/webhook/foi-reports",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "520e7055-29fa-4ce8-9924-aa32f73a215c",
+      "name": "Fetch FOI Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// FAS1 2026-06-10: källbortfalls-guard — HTTP-fel stoppar inte längre flödet,\n// utan ger ett markör-item som Aggregate rapporterar som otillgänglig källa.\nconst _in = $input.first().json || {};\nif (_in.error !== undefined) {\n  return [{ json: { source: 'FOI-rapporter', isEmpty: true, sourceUnavailable: 'FOI-rapporter' } }];\n}\n\nconst foiResponse = $json;\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nlet allReports = [];\n\ntry {\n  if (foiResponse.success && Array.isArray(foiResponse.reports)) {\n    allReports = foiResponse.reports\n      .filter(report => {\n        if (!report.date) return false;\n        const reportDate = new Date(report.date);\n        return reportDate >= dateFrom && reportDate <= dateTo;\n      })\n      .slice(0, 10)\n      .map(report => ({\n        source: 'FOI',\n        type: 'report',\n        title: report.title || `Rapport ${report.reportNo}`,\n        date: report.date,\n        url: report.sourceUrl || report.pdfUrl || '',\n        excerpt: report.title || report.reportNo\n      }));\n  }\n} catch (e) {\n  console.error('Error parsing FOI:', e);\n}\n\nreturn allReports.length > 0 ? allReports.map(r => ({ json: r })) : [{ json: { source: 'FOI', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "63ca6b7d-8c4a-4846-b55c-c2498a8ceac4",
+      "name": "Parse FOI Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "https://www.mcf.se/",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "21b56973-de76-4dd6-a0e5-26f4ee53ede9",
+      "name": "Fetch MCF News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        144
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// FAS1 2026-06-10: källbortfalls-guard — HTTP-fel stoppar inte längre flödet,\n// utan ger ett markör-item som Aggregate rapporterar som otillgänglig källa.\nconst _in = $input.first().json || {};\nif (_in.error !== undefined || !_in.data) {\n  return [{ json: { source: 'MCF', isEmpty: true, sourceUnavailable: 'MCF' } }];\n}\n\n// Parse MCF startsida for nyheter\nconst html = $json.data || '';\nconst items = [];\n\ntry {\n  // Sok efter nyheter/aktuellt-sektioner pa sidan\n  // MCF har typiskt nyheter i article-taggar eller nyhet-klasser\n  const newsMatches = html.matchAll(/<a[^>]*href=\"([^\"]*(?:nyhet|aktuellt|pressmeddelande)[^\"]*)\">([^<]+)<\\/a>/gi);\n  \n  for (const match of newsMatches) {\n    const url = match[1].startsWith('http') ? match[1] : `https://www.mcf.se${match[1]}`;\n    const title = match[2].trim();\n    \n    if (title && title.length > 10) {\n      items.push({\n        source: 'MCF',\n        type: 'news',\n        title: title,\n        url: url,\n        date: new Date().toISOString().split('T')[0],\n        excerpt: title\n      });\n    }\n  }\n  \n  // Fallback: hitta artiklar pa andra satt\n  if (items.length === 0) {\n    const articleMatches = html.matchAll(/<article[^>]*>([\\s\\S]*?)<\\/article>/gi);\n    for (const match of articleMatches) {\n      const content = match[1];\n      const titleMatch = content.match(/<h[23][^>]*>([^<]+)<\\/h[23]>/);\n      const linkMatch = content.match(/<a[^>]*href=\"([^\"]+)\"/);\n      \n      if (titleMatch) {\n        items.push({\n          source: 'MCF',\n          type: 'news',\n          title: titleMatch[1].trim(),\n          url: linkMatch ? (linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.mcf.se${linkMatch[1]}`) : 'https://www.mcf.se',\n          date: new Date().toISOString().split('T')[0],\n          excerpt: titleMatch[1].trim()\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('MCF parse error:', e);\n}\n\n// Returnera max 5 nyheter\nconst limited = items.slice(0, 5);\nreturn limited.length > 0 ? limited.map(i => ({ json: i })) : [{ json: { source: 'MCF', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "c78ad64f-438b-412c-8123-6d4f80141389",
+      "name": "Parse MCF News",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "https://carlheath.se/feed/",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "d992574f-ea3a-4e0f-82fc-8c2406aff255",
+      "name": "Fetch Carl Heath RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        288
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// FAS1 2026-06-10: källbortfalls-guard — HTTP-fel stoppar inte längre flödet,\n// utan ger ett markör-item som Aggregate rapporterar som otillgänglig källa.\nconst _in = $input.first().json || {};\nif (_in.error !== undefined || !_in.data) {\n  return [{ json: { source: 'Carl Heath-bloggen', isEmpty: true, sourceUnavailable: 'Carl Heath-bloggen' } }];\n}\n\nconst rssXml = $json.data;\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst posts = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch && pubDateMatch) {\n      const pubDate = new Date(pubDateMatch[1]);\n      \n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').substring(0, 300);\n        \n        posts.push({\n          source: 'Carl Heath',\n          type: 'blog',\n          title: titleMatch[1],\n          url: linkMatch[1],\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('RSS parse error:', e);\n}\n\nreturn posts.length > 0 ? posts.map(p => ({ json: p })) : [{ json: { source: 'Carl Heath', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "7d987ac3-f574-4b0d-8f2f-41cd986089e7",
+      "name": "Parse Carl Heath RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "https://www.oneusefulthing.org/feed",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "639fb4ee-9373-42b7-a7bc-340471d3815c",
+      "name": "Fetch One Useful Thing RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        448
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// FAS1 2026-06-10: källbortfalls-guard — HTTP-fel stoppar inte längre flödet,\n// utan ger ett markör-item som Aggregate rapporterar som otillgänglig källa.\nconst _in = $input.first().json || {};\nif (_in.error !== undefined || !_in.data) {\n  return [{ json: { source: 'One Useful Thing', isEmpty: true, sourceUnavailable: 'One Useful Thing' } }];\n}\n\nconst rssXml = $json.data;\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst posts = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch && pubDateMatch) {\n      const pubDate = new Date(pubDateMatch[1]);\n      \n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').substring(0, 300);\n        \n        posts.push({\n          source: 'One Useful Thing',\n          type: 'blog',\n          title: titleMatch[1],\n          url: linkMatch[1],\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('RSS parse error:', e);\n}\n\nreturn posts.length > 0 ? posts.map(p => ({ json: p })) : [{ json: { source: 'One Useful Thing', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "da9c532b-63a2-460c-aaff-1eb22bb5e124",
+      "name": "Parse One Useful Thing RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutGoogleSheets": "",
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU",
+          "mode": "list",
+          "cachedResultName": "Länsstyrelsen Curated Articles",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Curated Articles",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KVKIO5D5cqRF31rt2qv4bV3DhBz5xZYCAuoivjwBhEU/edit#gid=0"
+        },
+        "filtersUI": {},
+        "combineFilters": "OR",
+        "options": {}
+      },
+      "id": "864f2f50-a4b1-43fc-911c-b4026f7ee902",
+      "name": "Fetch Curated Articles",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.1,
+      "position": [
+        0,
+        608
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OlbIZDcLgr5zQs8a",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Max 5 kurerade artiklar per veckobrev\nconst MAX_CURATED_ARTICLES = 5;\n\nconst items = $input.all();\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst filteredItems = [];\n\nitems.forEach(item => {\n  const row = item.json;\n  if (!row.url || !row.title) return;\n\n  let dateAdded;\n  try {\n    dateAdded = new Date(row.date_added);\n    if (isNaN(dateAdded.getTime())) return;\n  } catch (e) {\n    return;\n  }\n\n  if (dateAdded >= dateFrom && dateAdded <= dateTo) {\n    filteredItems.push({\n      json: {\n        url: row.url.trim(),\n        title: row.title.trim(),\n        category: row.category || '',\n        dateAdded: row.date_added,\n        sheetRowIndex: item.index + 2\n      }\n    });\n  }\n});\n\n// Begränsa till max 5 artiklar (senaste först)\nconst limited = filteredItems\n  .sort((a, b) => new Date(b.json.dateAdded) - new Date(a.json.dateAdded))\n  .slice(0, MAX_CURATED_ARTICLES);\n\nconsole.log('Kurerade artiklar: ' + filteredItems.length + ' hittade, ' + limited.length + ' inkluderas (max ' + MAX_CURATED_ARTICLES + ')');\n\nreturn limited.length > 0\n  ? limited\n  : [{ json: { source: 'Curated Articles', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "972bd662-03e2-42d4-9f84-b9a58e687e4c",
+      "name": "Filter Active URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "=https://r.jina.ai/{{ $json.url }}",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "sendBody": false,
+        "options": {
+          "timeout": 20000
+        },
+        "infoMessage": ""
+      },
+      "id": "45faf494-09a8-4eeb-9e16-c197fb4ef7ca",
+      "name": "Fetch Article Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        448,
+        608
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const items = $input.all();\nconst originalItems = $('Filter Active URLs').all();\nconst parsedArticles = [];\n\nitems.forEach((item, idx) => {\n  if (item.json.isEmpty) {\n    parsedArticles.push(item);\n    return;\n  }\n\n  const originalData = originalItems[idx]?.json || {};\n\n  if (item.error || !item.json) {\n    parsedArticles.push({\n      json: {\n        source: 'Curated Articles',\n        type: 'curated',\n        title: originalData.title || 'Utan titel',\n        url: originalData.url || '',\n        date: originalData.dateAdded || '',\n        category: originalData.category || '',\n        excerpt: '[Artikelinnehall kunde inte hamtas]',\n        error: true\n      }\n    });\n    return;\n  }\n\n  let content = '';\n  let excerpt = '';\n\n  try {\n    if (item.json.data && item.json.data.content) {\n      content = item.json.data.content;\n    } else if (typeof item.json === 'string') {\n      content = item.json;\n    } else if (item.json.content) {\n      content = item.json.content;\n    }\n\n    excerpt = content\n      .replace(/#+\\s/g, '')\n      .replace(/\\[([^\\]]+)\\]\\([^\\)]+\\)/g, '$1')\n      .replace(/\\*\\*/g, '')\n      .replace(/\\n\\n+/g, ' ')\n      .trim()\n      .substring(0, 500);\n\n    if (content.length > 500) excerpt += '...';\n  } catch (e) {\n    excerpt = '[Tolkningsfel]';\n  }\n\n  parsedArticles.push({\n    json: {\n      source: 'Curated Articles',\n      type: 'curated',\n      title: originalData.title || 'Utan titel',\n      url: originalData.url || '',\n      date: originalData.dateAdded || '',\n      category: originalData.category || '',\n      excerpt: excerpt || content.substring(0, 500),\n      fullContent: content.substring(0, 2000),\n      error: false\n    }\n  });\n});\n\nreturn parsedArticles;",
+        "notice": ""
+      },
+      "id": "7eb8ef1b-c008-40f7-ad21-1fa553582889",
+      "name": "Parse Curated Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutGoogleSheets": "",
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1O7Ut7xEjaOZZZswodbAJ4ONRfMSogFHNEYRAF1TYKcg",
+          "mode": "list",
+          "cachedResultName": "Manual Quotes",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1O7Ut7xEjaOZZZswodbAJ4ONRfMSogFHNEYRAF1TYKcg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1O7Ut7xEjaOZZZswodbAJ4ONRfMSogFHNEYRAF1TYKcg/edit#gid=0"
+        },
+        "filtersUI": {},
+        "combineFilters": "OR",
+        "options": {}
+      },
+      "id": "8ce5e052-2017-4863-bc61-3ad2bbe620b6",
+      "name": "Fetch Manual Quotes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.1,
+      "position": [
+        0,
+        752
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OlbIZDcLgr5zQs8a",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// STRIKT FILTER: Endast citat fran senaste 7 dagarna\n// Citat UTAN datum exkluderas (tidigare fick de dagens datum)\nconst items = $input.all();\n\nconst now = new Date();\nconst sevenDaysAgo = new Date(now);\nsevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\nsevenDaysAgo.setHours(0, 0, 0, 0);\n\nconst quotes = [];\n\nconsole.log('=== CITATFILTER ===' );\nconsole.log('Godkanner endast citat fran:', sevenDaysAgo.toISOString().split('T')[0], 'till', now.toISOString().split('T')[0]);\n\nitems.forEach(item => {\n  const row = item.json;\n  \n  const quoteVal = row.quote || row.Quote || row.citat || row.Citat || row.text || row.Text || '';\n  const sourceVal = row.source || row.Source || row.kalla || row.Kalla || '';\n  const contextVal = row.context || row.Context || row.kontext || row.Kontext || '';\n  const urlVal = row.url || row.URL || row.Url || row.link || row.Link || '';\n  const dateVal = row.date_added || row.dateAdded || row.date || row.Date || row.datum || row.Datum || '';\n  \n  if (!quoteVal || !sourceVal) {\n    return;\n  }\n  \n  // STRIKT: Datum MASTE finnas\n  if (!dateVal) {\n    console.log('EXKLUDERAD (saknar datum):', sourceVal);\n    return;\n  }\n  \n  const dateAdded = new Date(dateVal);\n  \n  // STRIKT: Datum maste vara giltigt\n  if (isNaN(dateAdded.getTime())) {\n    console.log('EXKLUDERAD (ogiltigt datumformat):', sourceVal, '- varde:', dateVal);\n    return;\n  }\n  \n  // STRIKT: Maste vara inom senaste 7 dagarna\n  if (dateAdded < sevenDaysAgo) {\n    console.log('EXKLUDERAD (for gammalt):', sourceVal, '- datum:', dateVal);\n    return;\n  }\n  \n  if (dateAdded > now) {\n    console.log('EXKLUDERAD (framtida):', sourceVal, '- datum:', dateVal);\n    return;\n  }\n  \n  // Godkand!\n  quotes.push({\n    json: {\n      type: 'manual_quote',\n      quote: quoteVal.trim(),\n      source: sourceVal.trim(),\n      context: contextVal || '',\n      url: urlVal || '',\n      dateAdded: dateAdded.toISOString().split('T')[0]\n    }\n  });\n  console.log('GODKAND:', sourceVal, '- datum:', dateVal);\n});\n\nconsole.log('=== RESULTAT: ' + quotes.length + ' citat godkanda ===' );\n\nreturn quotes.length > 0 ? quotes : [{ json: { type: 'manual_quote', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "7ab9c5cd-698c-43c6-9a18-0c5d7ff268b6",
+      "name": "Filter Manual Quotes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        752
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "https://www.regeringen.se/Filter/RssFeed?filterType=Taxonomy&filterByType=FilterablePageBase&preFilteredCategories=1284%2C1285%2C1286%2C1287%2C1288%2C1290%2C1291%2C1292%2C1293%2C1294%2C1295%2C1296%2C1297%2C2425&rootPageReference=0&filteredContentCategories=1333%2C1334%2C1341%2C1342%2C1325%2C1327%2C1329%2C1331%2C1338%2C2214&filteredPoliticalLevelCategories=&filteredPoliticalAreaCategories=2248%2C1238%2C2247&filteredPublisherCategories=2611%2C2627",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "regeringen-fetch-001",
+      "name": "Fetch Regeringen RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        896
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// FAS1 2026-06-10: källbortfalls-guard — HTTP-fel stoppar inte längre flödet,\n// utan ger ett markör-item som Aggregate rapporterar som otillgänglig källa.\nconst _in = $input.first().json || {};\nif (_in.error !== undefined || !_in.data) {\n  return [{ json: { source: 'Regeringen (RSS)', isEmpty: true, sourceUnavailable: 'Regeringen (RSS)' } }];\n}\n\n// Parse Regeringen RSS-flode for nyheter om civilt forsvar/totalforsvar\nconst rssXml = $json.data || '';\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst posts = [];\n\ntry {\n  const itemMatches = rssXml.matchAll(/<item>([\\s\\S]*?)<\\/item>/g);\n  \n  for (const match of itemMatches) {\n    const itemXml = match[1];\n    \n    // Hantera bade CDATA och vanlig text\n    const titleMatch = itemXml.match(/<title><!\\[CDATA\\[(.+?)\\]\\]><\\/title>/) || itemXml.match(/<title>(.+?)<\\/title>/);\n    const linkMatch = itemXml.match(/<link><!\\[CDATA\\[(.+?)\\]\\]><\\/link>/) || itemXml.match(/<link>(.+?)<\\/link>/);\n    const pubDateMatch = itemXml.match(/<pubDate>(.+?)<\\/pubDate>/);\n    const descMatch = itemXml.match(/<description><!\\[CDATA\\[([\\s\\S]+?)\\]\\]><\\/description>/) || itemXml.match(/<description>([\\s\\S]+?)<\\/description>/);\n    \n    if (titleMatch && linkMatch) {\n      let pubDate = new Date();\n      if (pubDateMatch) {\n        pubDate = new Date(pubDateMatch[1]);\n      }\n      \n      // Filtrera pa datum\n      if (pubDate >= dateFrom && pubDate <= dateTo) {\n        let description = descMatch ? descMatch[1] : '';\n        description = description.replace(/<[^>]+>/g, '').trim().substring(0, 300);\n        \n        posts.push({\n          source: 'Regeringen',\n          type: 'government',\n          title: titleMatch[1].trim(),\n          url: linkMatch[1].trim(),\n          date: pubDate.toISOString().split('T')[0],\n          excerpt: description || titleMatch[1].trim()\n        });\n      }\n    }\n  }\n} catch (e) {\n  console.error('Regeringen RSS parse error:', e);\n}\n\nconst limited = posts.slice(0, 10);\nreturn limited.length > 0 ? limited.map(p => ({ json: p })) : [{ json: { source: 'Regeringen', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "regeringen-parse-001",
+      "name": "Parse Regeringen RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 17
+      },
+      "id": "c551ddc1-a8d8-484d-9537-d887ac6a93c5",
+      "name": "Merge All Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Aggregate (Val 2026) — samlar valbevakningskällor + Riksdag + tema-kontinuitet.\n// Ersätter \"Aggregate All Results\" i den klonade workflowen.\n// Läser DIREKT från Parse-noderna (undviker n8n Merge typeVersion 3.2-buggen).\n// Källkeys måste matcha sourceKey i Source Config (Val 2026).\nconst unavailableSources = [];\n\nconst readSource = (nodeName) => {\n  try {\n    const items = $(nodeName).all().map(i => i.json).filter(j => j);\n    items.forEach(j => {\n      if (j.sourceUnavailable && !unavailableSources.includes(j.sourceUnavailable)) {\n        unavailableSources.push(j.sourceUnavailable);\n      }\n    });\n    return items.filter(j => !j.isEmpty);\n  } catch (e) {\n    console.log(`Kunde inte lasa fran ${nodeName}: ${e.message}`);\n    return [];\n  }\n};\n\nconst fas3 = readSource('Parse Sources (Fas 3)');\nconst byKey = (k) => fas3.filter(j => j.sourceKey === k);\n\nconst response = {\n  success: true,\n  executionTime: new Date().toISOString(),\n  sources: {\n    // Nyhetsmedier\n    svt:            byKey('svt'),\n    svtvast:        byKey('svtvast'),\n    gp:             byKey('gp'),\n    // Officiell valmyndighet\n    valmyndigheten: byKey('valmynd'),\n    // Säkerhet & påverkansbevakning\n    mpf:            byKey('mpf'),\n    msb:            byKey('msb'),\n    sapo:           byKey('sapo'),\n    foi:            byKey('foi'),\n    certse:         byKey('certse'),\n    euvsdisinfo:    byKey('euvsdisinfo'),\n    // Riksdagsdokument/voteringar/kalender — befintliga noder, söksträngar omriktade\n    // mot vallag/demokrati (se BUILD.md, Compute Riksdag Date Range / Fetch Riksdag Documents).\n    riksdagDocuments: readSource('Parse Riksdag Documents'),\n    riksdagVotes:     readSource('Parse Riksdag Votes'),\n    riksdagCalendar:  readSource('Parse Riksdag Calendar'),\n    // Tema-kontinuitet 2026 — föregående perioders arkiverade teman (Notion Val2026-Teman)\n    previousWeeks:    readSource('Parse Previous Themes').filter(j => j.type === 'previous_week'),\n  },\n  totalItems: 0,\n  unavailableSources,\n};\n\nresponse.totalItems = Object.values(response.sources)\n  .reduce((sum, arr) => sum + arr.length, 0);\n\n// VG-flagga: deterministisk geografisk märkning (samma termlista som beredskapssektorer-brevet).\n// Nationell bevakning → VG markeras som sekundär flagga. Parametrisera vgTerms för annat län.\nconst normalizeUrl = (u) => (typeof u === 'string' && u.startsWith('//')) ? 'https:' + u : u;\nconst vgTerms = ['västra götaland','göteborg','trollhättan','vänersborg','borås','skövde',\n  'uddevalla','mariestad','lidköping','civilområde väst','civo v','sjuhärad','skaraborg',\n  'bohuslän','dalsland','vänern','stenungsund','lysekil','landvetter','göta älv','strömstad'];\nlet vgFlaggedCount = 0;\nObject.values(response.sources).forEach(arr => arr.forEach(item => {\n  if (item && typeof item === 'object') {\n    if (item.url) item.url = normalizeUrl(item.url);\n    if (typeof item.title === 'string') item.title = item.title.trim();\n    const blob = ((item.title || '') + ' ' + (item.excerpt || '') + ' ' + (item.fulltext || '') + ' ' + (item.titel || '')).toLowerCase();\n    if (blob.trim() && vgTerms.some(t => blob.includes(t))) {\n      item.vgFlagga = true;\n      vgFlaggedCount++;\n    }\n  }\n}));\nresponse.vgFlaggedCount = vgFlaggedCount;\n\nreturn [{ json: response }];\n",
+        "notice": ""
+      },
+      "id": "111d5a34-2280-4113-9d61-db078837fd66",
+      "name": "Aggregate All Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        352
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Prepare Synthesis Request (Val 2026) — fyra fasta valteman + källkritik + tema-kontinuitet.\n// Ersätter \"Prepare Synthesis Request\" i den klonade workflowen.\n// Läser Aggregate (Val 2026) → s.<källa>, samt s.previousWeeks ur Notion-arkivet.\n// Domänkontext bakas in INLINE (ingen Google Sheet-beroende som i civiltforsvar).\n// Output-JSON konsumeras av Parse Synthesis Response (generisk) och webhook export-json.\n\nconst aggregatedData = $('Aggregate All Results').first().json;\nconst config = $('Detect Execution Mode').first().json;\nconst s = aggregatedData.sources;\n\n// === Generisk källistrenderare ===\nfunction renderList(label, arr, opts) {\n  opts = opts || {};\n  arr = arr || [];\n  if (opts.skipEmpty && arr.length === 0) return '';\n  let out = '\\n' + label + ' (' + arr.length + '):\\n';\n  arr.forEach((item, i) => {\n    out += (i + 1) + '. ' + (item.title || item.titel || '') + '\\n';\n    if (item.date || item.datum) out += '   Datum: ' + (item.date || item.datum) + '\\n';\n    if (item.url) out += '   URL: ' + item.url + '\\n';\n    if (item.excerpt) out += '   Utdrag: ' + item.excerpt + '\\n';\n    if (item.vgFlagga) out += '   [VG-FLAGGA: trolig Västra Götaland-koppling]\\n';\n    out += '\\n';\n  });\n  return out;\n}\n\n// === Underlag ===\nlet contentSummary = 'Datumintervall: ' + config.dateFrom + ' till ' + config.dateTo + '\\n\\n';\ncontentSummary += '=== NYHETSMEDIER ===';\ncontentSummary += renderList('SVT NYHETER', s.svt, { skipEmpty: true });\ncontentSummary += renderList('SVT VÄSTNYTT', s.svtvast, { skipEmpty: true });\ncontentSummary += renderList('GÖTEBORGS-POSTEN', s.gp, { skipEmpty: true });\ncontentSummary += '\\n=== OFFICIELL VALMYNDIGHET ===';\ncontentSummary += renderList('VALMYNDIGHETEN', s.valmyndigheten, { skipEmpty: true });\ncontentSummary += '\\n=== SÄKERHET & PÅVERKANSBEVAKNING ===';\ncontentSummary += renderList('MYNDIGHETEN FÖR PSYKOLOGISKT FÖRSVAR (MPF)', s.mpf, { skipEmpty: true });\ncontentSummary += renderList('MSB', s.msb, { skipEmpty: true });\ncontentSummary += renderList('SÄKERHETSPOLISEN', s.sapo, { skipEmpty: true });\ncontentSummary += renderList('FOI', s.foi, { skipEmpty: true });\ncontentSummary += renderList('CERT-SE (CYBERINCIDENTER)', s.certse, { skipEmpty: true });\ncontentSummary += renderList('EUVSDISINFO (INTERNATIONELL PÅVERKAN)', s.euvsdisinfo, { skipEmpty: true });\n\n// Riksdagsdokument — prioritera valrelaterade (_kwHit) först, ta topp 10.\nconst rdDocs = (s.riksdagDocuments || [])\n  .slice()\n  .sort((a, b) => (b._kwHit ? 1 : 0) - (a._kwHit ? 1 : 0))\n  .slice(0, 10);\nif (rdDocs.length) {\n  contentSummary += '\\n=== RIKSDAGSDOKUMENT (vallag/demokrati prioriterat) ===\\n';\n  rdDocs.forEach((d, i) => {\n    contentSummary += (i + 1) + '. [' + (d.doktyp || '').toUpperCase() + ' ' + (d.beteckning || '') + '] ' + (d.titel || '') + '\\n' +\n      '   Datum: ' + (d.datum || '') + ' | URL: ' + (d.url || '') + (d._kwHit ? '\\n   [VAL-RELEVANT]' : '') + '\\n' +\n      (d.excerpt ? '   Utdrag: ' + d.excerpt + '\\n' : '') + '\\n';\n  });\n}\n\n// Riksdagens kalender (kommande 7 dagar) — underlag för upcomingWeek\nconst rdCal = (s.riksdagCalendar || []).slice(0, 15);\nif (rdCal.length) {\n  contentSummary += '\\n=== RIKSDAGENS KALENDER (kommande, för \"inkommande\") ===\\n';\n  rdCal.forEach((c, i) => {\n    contentSummary += (i + 1) + '. ' + (c.datum || '') + ' — ' + (c.organ || '') + ': ' + (c.aktivitet || '') + (c.summary ? ' — ' + c.summary : '') + '\\n';\n  });\n}\n\n// === Tema-kontinuitet: föregående perioders teman ur Notion-arkivet ===\nlet continuityInstruction = '';\ntry {\n  const prevWeeks = s.previousWeeks || [];\n  if (prevWeeks.length > 0) {\n    let block = '\\n\\n=== FÖREGÅENDE PERIODERS LÄGE (kontinuitetskontext ur arkivet) ===\\n';\n    prevWeeks.forEach(w => {\n      block += 'Vecka ' + (w.vecka || '?') + (w.period ? ' (' + w.period + ')' : '') + ':\\n';\n      if (w.themes && w.themes.length) block += '  Teman/signaler: ' + w.themes.join(' · ') + '\\n';\n      if (w.summary) block += '  Sammanfattning: ' + w.summary + '\\n';\n      block += '\\n';\n    });\n    contentSummary += block;\n    continuityInstruction = '\\n\\nVIKTIGT — TEMA-KONTINUITET:\\n' +\n      'Underlaget innehåller FÖREGÅENDE PERIODERS LÄGE ur arkivet. Analysera svepet i ljuset av detta.\\n' +\n      'Sätt för vart och ett av de fyra temana:\\n' +\n      '- \"kontinuitet\": \"fortsättning\" om temat förekommit de senaste perioderna (sakligt, inte ordagrant), annars \"nytt\".\\n' +\n      '- \"utveckling\": för fortsättning exakt 1 mening om vad som ÄNDRATS sedan förra perioden (eskalering, nytt narrativ, nytt beslut, dämpning). För nytt: null.\\n' +\n      'Använd kontinuiteten i executiveSummary där relevant (\"fortsatt\", \"trappas upp\", \"tredje veckan i rad\").';\n  }\n} catch (e) {\n  console.log('Kontinuitets-injektion misslyckades:', e.message);\n}\n\n// === Inline domänkontext: valorganisationens behov ===\nconst domainContext = `=== DOMÄNKONTEXT: LÄNSSTYRELSERNAS VALORGANISATION ===\nMottagare är de som arbetar med valgenomförandet vid landets länsstyrelser (regional\nvalmyndighet enligt vallagen). Deras behov: fånga upp hur valet, rösträkningen och\nmyndigheternas roll framställs och uppfattas — inte bred partipolitik eller opinionssiffror.\nLänsstyrelsen ansvarar bl.a. för den slutliga rösträkningen (\"onsdagsräkningen\") och för\nförtroendet för valets genomförande i länet. Bevakningen är nationell; Västra Götaland\nmarkeras som sekundär flagga (VG-FLAGGA i underlaget).`;\n\n// Verifierad rollkarta (OSINT-utredning 2026-06-29, primärkällebelagd) — grundar tema 3.\n// Detalj + källor: ~/projects/valbevakning-2026/osint-myndighetsroller.md\nconst myndighetsRoller = `=== VERIFIERAD ROLLKARTA: MYNDIGHETERNAS ROLL VID VALET 2026 (tema 3) ===\n(Primärkällebelagd OSINT 2026-06-29; regleringsbrev ej fulltextlästa — markera osäkerhet vid behov.)\n- Valmyndigheten: central valmyndighet — planerar/samordnar genomförandet, fastställer resultat, fördelar mandat. Sedan 1 dec 2025 även uttryckligt ansvar att samordna skyddet av val och driva ett nationellt valnätverk. Särskilt 2026-uppdrag: bredda info om utlandssvenskars rösträtt. (HÖG)\n- MPF (Myndigheten för psykologiskt försvar): stående roll mot otillbörlig informationspåverkan — hotanalys, kunskapshöjande kommunikation, utbildning av kommuner/länsstyrelser. Inget separat valuppdrag. (HÖG)\n- Säkerhetspolisen: stående roll — motverkar främmande makts påverkan mot det demokratiska statsskicket (författningsskydd), personskydd av statsledningen, underrättelser/hotavvärjning inför valet. Inget separat valuppdrag. (HÖG)\n- MCF (Myndigheten för civilt försvar, f.d. MSB, namnbyte 2026-01-01): deltar i valnätverket med fokus på beredskap och skydd av samhällsviktig verksamhet. (MEDEL)\nVIKTIGA KORRIGERINGAR (använd vid tema 3 och källkritik):\n- \"MSB\" ska i valåret 2026 tolkas som MCF (samma myndighet, nytt namn).\n- Bemötande av desinformation/informationspåverkan ligger på MPF — INTE på MCF.\n- Länsstyrelserna = regional valmyndighet (slutlig rösträkning).\n- Tillskriv ingen myndighet ett mandat utan stöd i underlaget; flagga osäkerhet om källa saknas.`;\n\n// === Systemprompt: fyra fasta valteman + källkritik ===\nlet systemPrompt = `Du är en strategisk analytiker för Sveriges länsstyrelsers valorganisationer.\nDin uppgift är att analysera omvärldssvepet inför och under riksdagsvalet 2026 utifrån\nfyra fasta bevakningsteman — inte bred partipolitisk opinionsbevakning.\n\n${domainContext}\n\n${myndighetsRoller}\n\nDE FYRA FASTA TEMANA (analysera ALLA fyra varje gång, även om läget är lugnt):\n1. valsystemet — Valsystemet: hur det rapporteras om, framställs och tycks uppfattas av allmänhet och media.\n2. rostrakningen — Rösträkningen specifikt: hur säker och tillförlitlig den uppfattas; påståenden om fusk/felräkning.\n3. myndigheternas_roll — Myndigheternas roll kopplat till valet (Valmyndigheten, länsstyrelserna, MSB, MPF, Polisen, kommunerna).\n4. demokratinarrativ — Narrativ rörande den (representativa) demokratin som system: dess legitimitet, kris/styrka, alternativ.\n\nANALYS, INTE BARA SAMMANSTÄLLNING:\n- Beskriv för varje tema lägesbilden: vad rapporteras/sägs, av vem, och vilket tonläge som råder.\n- Väg in föregående perioders läge (om det finns i underlaget) — sätt kontinuitet och utveckling.\n- Sätt \"trafikljus\" per tema som signalnivå: \"grön\" (stabilt, inga nya signaler), \"gul\" (rörelse/ökad uppmärksamhet noterad), \"röd\" (markant förändring eller spridning som motiverar uppmärksamhet hos valorganisationen).\n\nKÄLLKRITIK OCH DESINFORMATIONSFLAGGNING (obligatoriskt):\nIdentifiera vilseledande eller potentiellt koordinerade narrativ om valsäkerhet, rösträkning\neller demokratin. För varje sådant: bedöm konfidens enligt fyra dimensioner —\n(1) ursprung/avsändare, (2) aktualitet, (3) syfte/bias, (4) verifierbarhet (≥2 primärkällor).\nSätt \"konfidens\": \"HÖG\" | \"MEDEL\" | \"LÅG\" | \"FLAGGA\" (FLAGGA = tydlig varningssignal: anonym\navsändare, statistik utan källa, citat utan kontext, manipulerad bild).\nVIKTIGT — MYNDIGHETSROLL: Beskriv och flagga narrativ. Uttala ALDRIG en tvärsäker sanningsdom\nom enskild aktörs avsikt utan spårbar grund. Ange alltid källa och kort, neutral motivering.\n\nREGLER:\n- Använd ENDAST information ur underlaget. Hitta inte på nyheter, citat eller källor.\n- Varje påstående som förs vidare ska kunna knytas till en källa med URL/datum i underlaget.\n- Sätt \"vgRelevans\" (boolesk true/false, ALDRIG sträng) per tema och per keyItem: true endast vid\n  uttrycklig koppling till Västra Götaland (geografi, aktör, verksamhet i länet).\n\nReturnera ENBART ETT (1) JSON-objekt med SAMTLIGA fält i samma objekt — ingen annan text,\ninga markdown-block, och dela ALDRIG upp svaret i flera separata objekt. Struktur:\n{\n  \"executiveSummary\": \"3–5 meningar om svepets helhet, med kontinuitet där relevant.\",\n  \"themes\": [\n    {\n      \"id\": \"valsystemet\",\n      \"title\": \"Valsystemet – framställning och förtroende\",\n      \"lagesbild\": \"2–4 meningar: vad rapporteras/sägs, av vem, tonläge.\",\n      \"kontinuitet\": \"nytt eller fortsättning\",\n      \"utveckling\": \"1 mening för fortsättning, annars null\",\n      \"trafikljus\": \"grön | gul | röd\",\n      \"vgRelevans\": false\n    }\n    // ...exakt fyra objekt, ett per id: valsystemet, rostrakningen, myndigheternas_roll, demokratinarrativ\n  ],\n  \"narrativeFlags\": [\n    {\n      \"pastaende\": \"Det vilseledande/omtvistade narrativet, kort.\",\n      \"tema\": \"rostrakningen\",\n      \"spridning\": \"Var/vem sprider det (källtyp, ej namngiven privatperson).\",\n      \"konfidens\": \"HÖG | MEDEL | LÅG | FLAGGA\",\n      \"konfidensMotivering\": \"Vilken/vilka av de fyra dimensionerna som driver bedömningen.\",\n      \"kalla\": \"URL eller källa ur underlaget\",\n      \"kommentar\": \"Neutral myndighetsbeskrivning, ej sanningsdom utan grund.\"\n    }\n  ],\n  \"keyItems\": [\n    { \"title\": \"Rubrik\", \"source\": \"Källa\", \"date\": \"YYYY-MM-DD\", \"url\": \"URL\", \"tema\": \"valsystemet|rostrakningen|myndigheternas_roll|demokratinarrativ\", \"vgRelevans\": false, \"note\": \"1 mening om varför den är relevant.\" }\n  ],\n  \"upcomingWeek\": [\n    { \"datum\": \"YYYY-MM-DD\", \"händelse\": \"Kort beskrivning (max 15 ord).\", \"källa\": \"Riksdagens kalender | Artikel | Valmyndigheten\" }\n  ],\n  \"osakerhet\": \"1–3 meningar: vad bevakningen INTE fångat denna period, källbortfall, tolkningsosäkerhet.\"\n}`;\n\n// Längdstyrning\nsystemPrompt += '\\n\\nLÄNGDSTYRNING (max_tokens=16384): Håll svaret under 14000 tokens. ' +\n  'themes: exakt 4. narrativeFlags: max 8. keyItems: max 12; note max 1 mening. ' +\n  'upcomingWeek: max 8. Var konkret och faktabaserad. Ingen prosa utanför fältvärdena.';\n\nsystemPrompt += continuityInstruction;\n\nconst userPrompt = 'Analysera följande omvärldssvep och generera valbevakning enligt schemat:\\n\\n' + contentSummary;\n\n// Modellval via webhook-body { \"model\": \"claude-...\" }, default Opus 4.8\nconst model = (typeof config.modelOverride === 'string' && config.modelOverride.startsWith('claude-'))\n  ? config.modelOverride\n  : 'claude-opus-4-8';\n\nreturn [{\n  json: {\n    sourceData: aggregatedData,\n    claudeRequest: {\n      model: model,\n      max_tokens: 16384,\n      system: systemPrompt,\n      messages: [{ role: 'user', content: userPrompt }],\n    },\n  },\n}];\n",
+        "notice": ""
+      },
+      "id": "1308566e-128a-44bb-8d18-f56352c8432a",
+      "name": "Prepare Synthesis Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $credentials.httpHeaderAuth.value }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claudeRequest }}",
+        "options": {
+          "timeout": 180000
+        },
+        "infoMessage": ""
+      },
+      "id": "88721cac-321f-461c-8cef-b034bd899aa8",
+      "name": "Call Synthesis AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1552,
+        352
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "yogPrRv8DOXTrRZJ",
+          "name": "Anthropic account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Parse Synthesis Response (Val 2026) — robust mot att modellen delar svaret i flera\n// top-level JSON-objekt (`}\\n{`). Ersätter \"Parse Synthesis Response\".\n// Strategi: 1) JSON.parse rakt av. 2) annars extrahera alla balanserade top-level-objekt\n// och Object.assign:a ihop dem. 3) annars fallback. Defaultar val-fälten.\nconst claudeResponse = $json;\nconst sourceData = $('Prepare Synthesis Request').first().json.sourceData;\n\n// Hitta alla balanserade top-level {...}-objekt (strängmedveten brace-scan).\nfunction extractObjects(text) {\n  const objs = [];\n  let depth = 0, start = -1, inStr = false, esc = false;\n  for (let i = 0; i < text.length; i++) {\n    const c = text[i];\n    if (inStr) {\n      if (esc) esc = false;\n      else if (c === '\\\\') esc = true;\n      else if (c === '\"') inStr = false;\n      continue;\n    }\n    if (c === '\"') inStr = true;\n    else if (c === '{') { if (depth === 0) start = i; depth++; }\n    else if (c === '}') { depth--; if (depth === 0 && start >= 0) { objs.push(text.slice(start, i + 1)); start = -1; } }\n  }\n  return objs;\n}\n\ntry {\n  let aiText = claudeResponse.content[0].text.trim();\n  if (aiText.startsWith('```')) aiText = aiText.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '');\n\n  let insights = null;\n  try {\n    insights = JSON.parse(aiText);\n  } catch (e) {\n    // Modellen kan ha delat svaret i flera top-level-objekt → slå ihop dem.\n    const parts = extractObjects(aiText);\n    if (parts.length) {\n      const merged = {};\n      let any = false;\n      for (const p of parts) {\n        try { Object.assign(merged, JSON.parse(p)); any = true; } catch (e2) { /* hoppa trasig del */ }\n      }\n      if (any) insights = merged;\n    }\n  }\n  if (!insights || typeof insights !== 'object') {\n    insights = { executiveSummary: 'Kunde inte parsa AI-svaret korrekt.' };\n  }\n\n  // Default val-fälten\n  insights.themes = insights.themes || [];\n  insights.narrativeFlags = insights.narrativeFlags || [];\n  insights.keyItems = insights.keyItems || [];\n  insights.upcomingWeek = insights.upcomingWeek || [];\n  insights.osakerhet = insights.osakerhet || '';\n\n  // Tvinga vgRelevans till äkta boolesk (AI kan returnera strängen \"false\").\n  ['themes', 'keyItems'].forEach(k => (insights[k] || []).forEach(it => {\n    if (it && typeof it === 'object') it.vgRelevans = it.vgRelevans === true || it.vgRelevans === 'true';\n  }));\n\n  return [{\n    json: {\n      success: true,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources,\n      aiInsights: insights,\n      metadata: {\n        model: claudeResponse.model || 'claude-opus-4-8',\n        stopReason: claudeResponse.stop_reason,\n        tokensUsed: claudeResponse.usage,\n      },\n    },\n  }];\n} catch (error) {\n  return [{\n    json: {\n      success: false,\n      error: error.message,\n      executionTime: sourceData.executionTime,\n      sourceData: sourceData.sources,\n      aiInsights: {\n        executiveSummary: 'Fel vid AI-analys: ' + error.message,\n        themes: [], narrativeFlags: [], keyItems: [], upcomingWeek: [], osakerhet: '',\n      },\n    },\n  }];\n}\n",
+        "notice": ""
+      },
+      "id": "e4b68ed5-78d5-4680-88c1-2f841ac9effc",
+      "name": "Parse Synthesis Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1776,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Generate HTML Email (Val 2026) — fyra tema-kort + trafikljus + kontinuitet + källkritik.\n// Ersätter \"Generate HTML Email\". Table-baserad layout, LST grafisk profil (samma som\n// civiltforsvar-/beredskapssektorer-breven). Returnerar {html, subject, shouldSendEmail, debug}.\n\nconst data = $json;\nconst insights = data.aiInsights || {};\nconst config = $('Detect Execution Mode').first().json;\n\nconst executiveSummary = insights.executiveSummary || 'Ingen sammanfattning tillgänglig.';\nconst themes = insights.themes || [];\nconst narrativeFlags = insights.narrativeFlags || [];\nconst keyItems = insights.keyItems || [];\nconst upcoming = insights.upcomingWeek || [];\nconst osakerhet = insights.osakerhet || '';\n\nlet unavailableSources = [];\ntry { unavailableSources = $('Aggregate All Results').first().json.unavailableSources || []; } catch (e) {}\n\n// === Färgpalett (LST-profil) ===\nconst C = {\n  primary: '#004B87', gold: '#E4B363', bg: '#EAEEF2', white: '#FFFFFF',\n  cardBg: '#F0F4F8', text: '#1a1a1a', textMuted: '#555555', textLight: '#999999',\n  border: '#E0E0E0',\n  gron: '#2E7D32', gul: '#F57F17', rod: '#C62828', lila: '#6A1B9A', gra: '#777777',\n};\nconst serif = \"Georgia,'Times New Roman',serif\";\nconst sans = \"Arial,Helvetica,sans-serif\";\n\nfunction sectionHeader(num, title, count) {\n  const countHtml = count !== undefined\n    ? ` <span style=\"font-family:${sans};font-size:12px;color:${C.textLight};\">(${count})</span>` : '';\n  return `\n    <tr><td style=\"padding:36px 40px 0 40px;\">\n      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\">\n        <tr><td style=\"height:1px;background-color:${C.border};font-size:1px;line-height:1px;\">&nbsp;</td></tr>\n      </table>\n    </td></tr>\n    <tr><td style=\"padding:24px 40px 16px 40px;\">\n      <span style=\"font-family:${serif};font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${C.primary};\">${String(num).padStart(2,'0')}</span>\n      <span style=\"font-family:${serif};font-size:11px;letter-spacing:2px;color:${C.textLight};\"> — </span>\n      <span style=\"font-family:${serif};font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${C.primary};\">${title}</span>${countHtml}\n    </td></tr>`;\n}\nfunction emptySection(text) {\n  return `<p style=\"font-family:${sans};font-size:14px;color:${C.textLight};font-style:italic;margin:0;padding:4px 0;\">${text}</p>`;\n}\nfunction linkButton(url, text) {\n  if (url && url.indexOf('//') === 0) url = 'https:' + url;\n  return `<a href=\"${url}\" target=\"_blank\" style=\"font-family:${sans};font-size:13px;color:${C.primary};text-decoration:none;border-bottom:1px solid ${C.primary};\">${text} &#8594;</a>`;\n}\nfunction badge(color, bg, text) {\n  return `<span style=\"display:inline-block;font-family:${sans};font-size:10px;letter-spacing:1px;font-weight:600;color:${color};background-color:${bg};padding:2px 8px;margin-left:6px;\">${text}</span>`;\n}\nfunction vgBadge(flag) { return flag ? badge('#013452', C.gold, 'VG') : ''; }\n\n// Trafikljus → färg + symbol\nfunction trafik(v) {\n  const t = (v || '').toLowerCase();\n  if (t === 'röd' || t === 'rod' || t === 'red') return { color: C.rod, dot: '&#128308;', label: 'RÖD' };\n  if (t === 'gul' || t === 'yellow') return { color: C.gul, dot: '&#128993;', label: 'GUL' };\n  return { color: C.gron, dot: '&#128994;', label: 'GRÖN' };\n}\nfunction kontBadge(k) {\n  return (k === 'fortsättning' || k === 'fortsattning')\n    ? badge('#FFFFFF', C.lila, '&#8634; FORTSÄTTNING')\n    : badge('#FFFFFF', C.primary, 'NYTT');\n}\n// Konfidens → badge (källkritik)\nfunction konfBadge(k) {\n  const map = {\n    'HÖG': [C.gron, '#E6F4EA'], 'HOG': [C.gron, '#E6F4EA'],\n    'MEDEL': [C.gul, '#FFF3D9'], 'LÅG': [C.gra, '#EEEEEE'], 'LAG': [C.gra, '#EEEEEE'],\n    'FLAGGA': ['#FFFFFF', C.rod],\n  };\n  const key = (k || '').toUpperCase();\n  const [color, bg] = map[key] || [C.gra, '#EEEEEE'];\n  const prefix = key === 'FLAGGA' ? '&#9888; ' : '';\n  return `<span style=\"display:inline-block;font-family:${sans};font-size:10px;letter-spacing:1px;font-weight:700;color:${color};background-color:${bg};padding:2px 8px;\">${prefix}${key || 'OKÄND'}</span>`;\n}\n\nconst TITLES = {\n  valsystemet: 'Valsystemet – framställning och förtroende',\n  rostrakningen: 'Rösträkningen – säkerhet och tillförlitlighet',\n  myndigheternas_roll: 'Myndigheternas roll i valet',\n  demokratinarrativ: 'Narrativ om demokratin som system',\n};\n\n// === Bygg HTML ===\nlet html = `<!DOCTYPE html>\n<html lang=\"sv\" xmlns=\"http://www.w3.org/1999/xhtml\">\n<head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n<title>Valbevakning 2026</title>\n<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]--></head>\n<body style=\"margin:0;padding:0;background-color:${C.bg};font-family:${serif};-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;\">\n<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\" style=\"background-color:${C.bg};\">\n  <tr><td align=\"center\" style=\"padding:24px 12px;\">\n  <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"640\" style=\"max-width:640px;width:100%;background-color:${C.white};\">\n    <!-- HEADER -->\n    <tr><td style=\"background-color:${C.primary};padding:0;\">\n      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\"><tr><td style=\"height:4px;background-color:${C.gold};font-size:1px;line-height:1px;\">&nbsp;</td></tr></table>\n      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\">\n        <tr><td style=\"padding:32px 40px 10px 40px;\"><span style=\"font-family:${serif};font-size:12px;letter-spacing:2.5px;text-transform:uppercase;color:${C.gold};\">Länsstyrelsen — valorganisationen</span></td></tr>\n        <tr><td style=\"padding:0 40px 6px 40px;\">\n          <span style=\"font-family:${serif};font-size:28px;font-weight:bold;color:${C.white};line-height:1.2;\">Valbevakning 2026</span>\n          <span style=\"font-family:${serif};font-size:28px;color:rgba(255,255,255,0.45);\"> — </span>\n          <span style=\"font-family:${serif};font-size:28px;font-style:italic;color:rgba(255,255,255,0.85);\">${config.dailyMode ? 'daglig radar' : 'lägesbild'}</span>\n        </td></tr>\n        <tr><td style=\"padding:0 40px 28px 40px;\"><span style=\"font-family:${sans};font-size:14px;color:rgba(255,255,255,0.55);\">${config.dailyMode ? 'Dygnsfönster' : 'Period'}: ${config.dateFrom} — ${config.dateTo}</span></td></tr>\n      </table>\n    </td></tr>`;\n\n// 01 SAMMANFATTNING\nhtml += `\n    <tr><td style=\"padding:32px 40px 0 40px;\">\n      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\">\n        <tr><td style=\"padding-bottom:16px;\">\n          <span style=\"font-family:${serif};font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${C.primary};\">01</span>\n          <span style=\"font-family:${serif};font-size:11px;letter-spacing:2px;color:${C.textLight};\"> — </span>\n          <span style=\"font-family:${serif};font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${C.primary};\">Sammanfattning</span>\n        </td></tr>\n        <tr><td style=\"background-color:${C.cardBg};border-left:4px solid ${C.primary};padding:24px 28px;\">\n          <p style=\"font-family:${serif};font-size:16px;line-height:1.7;color:${C.text};margin:0;\">${executiveSummary}</p>\n        </td></tr>\n      </table>\n    </td></tr>`;\n\n// 02 DE FYRA TEMANA\nhtml += sectionHeader(2, 'De fyra temana', themes.length);\nhtml += `<tr><td style=\"padding:0 40px;\">`;\nif (themes.length > 0) {\n  themes.forEach(t => {\n    const tl = trafik(t.trafikljus);\n    const title = t.title || TITLES[t.id] || t.id || 'Tema';\n    const utv = (t.utveckling && t.utveckling !== 'null')\n      ? `<p style=\"font-family:${sans};font-size:13px;color:${C.textMuted};margin:8px 0 0 0;\"><strong>Sedan förra perioden:</strong> ${t.utveckling}</p>` : '';\n    html += `\n    <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\" style=\"margin-bottom:12px;\">\n      <tr><td style=\"border-left:4px solid ${tl.color};background-color:${C.cardBg};padding:16px 20px;\">\n        <span style=\"font-size:15px;\">${tl.dot}</span>\n        <span style=\"font-family:${serif};font-size:17px;font-weight:bold;color:${C.text};\">${title}</span>\n        ${kontBadge(t.kontinuitet)}${vgBadge(t.vgRelevans)}\n        <p style=\"font-family:${serif};font-size:15px;line-height:1.6;color:${C.text};margin:10px 0 0 0;\">${t.lagesbild || ''}</p>\n        ${utv}\n      </td></tr>\n    </table>`;\n  });\n} else {\n  html += emptySection('Inga teman genererade denna period.');\n}\nhtml += `</td></tr>`;\n\n// 03 KÄLLKRITIK / FLAGGADE NARRATIV\nhtml += sectionHeader(3, 'Källkritik — flaggade narrativ', narrativeFlags.length);\nhtml += `<tr><td style=\"padding:0 40px;\">`;\nif (narrativeFlags.length > 0) {\n  narrativeFlags.forEach(f => {\n    const isFlag = (f.konfidens || '').toUpperCase() === 'FLAGGA';\n    const bc = isFlag ? C.rod : C.gold;\n    html += `\n    <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\" style=\"margin-bottom:12px;\">\n      <tr><td style=\"border-left:4px solid ${bc};background-color:${C.cardBg};padding:16px 20px;\">\n        ${konfBadge(f.konfidens)}\n        <p style=\"font-family:${serif};font-size:15px;font-weight:bold;color:${C.text};margin:8px 0 6px 0;\">${f.pastaende || ''}</p>\n        <p style=\"font-family:${sans};font-size:13px;color:${C.textMuted};margin:0 0 4px 0;\"><strong>Spridning:</strong> ${f.spridning || 'okänd'} &nbsp;·&nbsp; <strong>Tema:</strong> ${TITLES[f.tema] || f.tema || '—'}</p>\n        <p style=\"font-family:${sans};font-size:13px;color:${C.textMuted};margin:0 0 4px 0;\"><strong>Bedömning:</strong> ${f.konfidensMotivering || ''}</p>\n        ${f.kommentar ? `<p style=\"font-family:${sans};font-size:13px;color:${C.text};margin:0 0 6px 0;\">${f.kommentar}</p>` : ''}\n        ${f.kalla ? linkButton(f.kalla, 'Källa') : ''}\n      </td></tr>\n    </table>`;\n  });\n} else {\n  html += emptySection('Inga vilseledande narrativ flaggade denna period.');\n}\nhtml += `</td></tr>`;\n\n// 04 NYCKELPOSTER\nhtml += sectionHeader(4, 'Nyckelposter', keyItems.length);\nhtml += `<tr><td style=\"padding:0 40px;\">`;\nif (keyItems.length > 0) {\n  keyItems.forEach(it => {\n    html += `\n    <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\" style=\"margin-bottom:10px;\">\n      <tr><td style=\"border-left:4px solid ${C.primary};background-color:${C.cardBg};padding:14px 18px;\">\n        <span style=\"font-family:${serif};font-size:15px;font-weight:bold;color:${C.text};\">${it.title || ''}</span>${vgBadge(it.vgRelevans)}\n        <p style=\"font-family:${sans};font-size:12px;color:${C.textLight};margin:4px 0 6px 0;\">${it.source || ''}${it.date ? ' · ' + it.date : ''}${it.tema ? ' · ' + (TITLES[it.tema] || it.tema) : ''}</p>\n        ${it.note ? `<p style=\"font-family:${sans};font-size:13px;color:${C.text};margin:0 0 6px 0;\">${it.note}</p>` : ''}\n        ${it.url ? linkButton(it.url, 'Läs') : ''}\n      </td></tr>\n    </table>`;\n  });\n} else {\n  html += emptySection('Inga nyckelposter denna period.');\n}\nhtml += `</td></tr>`;\n\n// 05 INKOMMANDE\nhtml += sectionHeader(5, 'Inkommande', upcoming.length);\nhtml += `<tr><td style=\"padding:0 40px;\">`;\nif (upcoming.length > 0) {\n  upcoming.forEach(ev => {\n    html += `\n    <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\" style=\"margin-bottom:12px;\">\n      <tr><td style=\"border-left:4px solid ${C.gold};background-color:#FFF8E1;padding:16px 20px;\">\n        <span style=\"display:inline-block;font-family:${serif};font-size:14px;font-weight:bold;color:${C.text};background:#FFFFFF;padding:2px 10px;\">${ev.datum || ''}</span>\n        <span style=\"font-family:${sans};font-size:15px;color:${C.text};padding-left:12px;\">${ev.händelse || ev.handelse || ''}</span>\n        <p style=\"font-family:${sans};font-size:12px;color:${C.textLight};margin:6px 0 0 0;font-style:italic;\">${ev.källa || ev.kalla || ''}</p>\n      </td></tr>\n    </table>`;\n  });\n} else {\n  html += emptySection('Inga kända händelser kommande period.');\n}\nhtml += `</td></tr>`;\n\n// 06 OSÄKERHET (REPORT-VALIDATOR)\nhtml += sectionHeader(6, 'Osäkerhet', undefined);\nhtml += `<tr><td style=\"padding:0 40px;\">`;\nhtml += `<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\"><tr><td style=\"border-left:4px solid ${C.gra};background-color:#F5F5F5;padding:16px 20px;\">\n  <p style=\"font-family:${sans};font-size:13px;line-height:1.6;color:${C.textMuted};margin:0;\">${osakerhet || 'Ingen särskild osäkerhet noterad.'}</p>\n</td></tr></table>`;\nhtml += `</td></tr>`;\n\n// FOOTER + AI-deklaration\nconst unavailNotice = unavailableSources.length\n  ? `<p style=\"font-family:${sans};font-size:12px;color:${C.gold};margin:0 0 8px 0;\">&#9888; Källor otillgängliga denna period: ${unavailableSources.join(', ')}</p>` : '';\nhtml += `\n    <tr><td style=\"padding:40px 40px 0 40px;\"><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\"><tr><td style=\"height:1px;background-color:${C.border};font-size:1px;line-height:1px;\">&nbsp;</td></tr></table></td></tr>\n    <tr><td style=\"background-color:${C.primary};padding:0;\">\n      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\"><tr><td style=\"height:3px;background-color:${C.gold};font-size:1px;line-height:1px;\">&nbsp;</td></tr></table>\n      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" width=\"100%\"><tr><td style=\"padding:24px 40px;\">\n        ${unavailNotice}<p style=\"font-family:${sans};font-size:12px;color:rgba(255,255,255,0.6);margin:0 0 4px 0;\">AI-genererad lägesbild — fyra teman, källkritik enligt OSINT-ram. Verifiera mot primärkälla före vidare spridning.</p>\n        <p style=\"font-family:${sans};font-size:12px;color:rgba(255,255,255,0.4);margin:0;\">${new Date().toLocaleString('sv-SE')} · Modell: ${(data.metadata && data.metadata.model) || 'Claude'} · Valbevakning 2026</p>\n      </td></tr></table>\n    </td></tr>\n  </table>\n  </td></tr>\n</table>\n</body>\n</html>`;\n\nreturn [{\n  json: {\n    html: html,\n    subject: config.dailyMode\n      ? `Valbevakning 2026 — daglig radar ${config.dateTo}`\n      : `Valbevakning 2026 — ${config.dateFrom} till ${config.dateTo}`,\n    shouldSendEmail: config.shouldSendEmail,\n    debug: {\n      themesCount: themes.length,\n      narrativeFlagsCount: narrativeFlags.length,\n      keyItemsCount: keyItems.length,\n      upcomingCount: upcoming.length,\n    },\n  },\n}];\n",
+        "notice": ""
+      },
+      "id": "4652a8d2-9180-44a9-aca1-1952ef8c57e6",
+      "name": "Generate HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "0001",
+              "leftValue": "={{ $json.shouldSendEmail }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "0a64175d-7972-430a-b58a-c85f1a7104f2",
+      "name": "Should Send Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2224,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "enableResponseOutput": false,
+        "generalNotice": "",
+        "respondWith": "json",
+        "webhookNotice": "",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "cf6b92ac-deb3-4066-8c90-f4b72ae92c4a",
+      "name": "Return JSON Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2448,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutGmail": "",
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "josef.bengtson@lansstyrelsen.se",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "e97007ab-569c-4929-b128-69c01923785b",
+      "name": "Send Weekly Report Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2448,
+        448
+      ],
+      "webhookId": "9d6fd3ef-1357-4416-b894-4de5cbedf44c",
+      "executeOnce": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "wHztIiURsH7pi9w0",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "notice": ""
+      },
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -656,
+        512
+      ],
+      "id": "9d111700-790f-4a93-addb-9a3c8c8eec7b",
+      "name": "When clicking 'Execute workflow'"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// FAS1 2026-06-10: hoppa över sidoeffekt i test-/exportläge — TTS-generering (ElevenLabs-krediter + Drive-fil)\ntry {\n  const _mode = $('Detect Execution Mode').first().json;\n  if (_mode && _mode.shouldSendEmail === false) { return []; }\n} catch (e) {}\n\n // Hämta innehållet från Generate HTML Email\n  const inputData = $input.first().json;\n  const content = inputData.html || '';\n  const weekNumber = inputData.weekNumber || getWeekNumber(new Date());\n\n  function cleanForSpeech(text) {\n    return text\n      // Ta bort style-block helt (inklusive innehåll)\n      .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n      // Ta bort script-block helt\n      .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n      // Ta bort head-block helt\n      .replace(/<head[^>]*>[\\s\\S]*?<\\/head>/gi, '')\n      // Ta bort HTML-kommentarer\n      .replace(/<!--[\\s\\S]*?-->/g, '')\n      // Ta bort alla HTML-taggar\n      .replace(/<[^>]*>/g, '')\n      // Ta bort markdown bold/italic\n      .replace(/\\*\\*(.*?)\\*\\*/g, '$1')\n      .replace(/\\*(.*?)\\*/g, '$1')\n      // Ta bort markdown headers\n      .replace(/#{1,6}\\s*/g, '')\n      // Ta bort markdown listor\n      .replace(/^[\\s]*[-*+]\\s+/gm, '')\n      // Ta bort markdown länkar, behåll texten\n      .replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1')\n      // Ta bort URLs\n      .replace(/https?:\\/\\/\\S+/g, '')\n      // Ta bort e-postadresser\n      .replace(/[\\w.-]+@[\\w.-]+\\.\\w+/g, '')\n      // Ersätt HTML-entities\n      .replace(/&nbsp;/g, ' ')\n      .replace(/&amp;/g, '&')\n      .replace(/&lt;/g, '<')\n      .replace(/&gt;/g, '>')\n      .replace(/&quot;/g, '\"')\n      // Normalisera radbrytningar och whitespace\n      .replace(/\\n{3,}/g, '\\n\\n')\n      .replace(/\\s+/g, ' ')\n      .trim();\n  }\n\n  function getWeekNumber(date) {\n    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));\n    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));\n    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));\n    return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);\n  }\n\n  function estimateDuration(text) {\n    const wordCount = text.split(/\\s+/).length;\n    return Math.ceil(wordCount / 150);\n  }\n\n  // Rensa texten\n  const cleanedContent = cleanForSpeech(content);\n\n  // Skapa intro och outro\n  const intro = `Veckorapport Civilt försvar och AI, vecka ${weekNumber}, ${new Date().getFullYear()}. `;\n  const outro = ` Det var veckans sammanfattning. Tack för att du lyssnade.`;\n  const fullTtsText = intro + cleanedContent + outro;\n\n  // Skapa API body för ElevenLabs\n  const apiBody = JSON.stringify({\n    text: fullTtsText,\n    model_id: \"eleven_multilingual_v2\",\n    voice_settings: {\n      stability: 0.5,\n      similarity_boost: 0.75\n    }\n  });\n\n  return [{\n    json: {\n      cleanedContent: fullTtsText,\n      apiBody: apiBody,\n      estimatedDurationMinutes: estimateDuration(fullTtsText),\n      weekNumber: weekNumber,\n      fileName: `Veckorapport_CF-AI_${new Date().getFullYear()}-W${String(weekNumber).padStart(2, '0')}.mp3`\n    }\n  }];\n",
+        "notice": ""
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        688
+      ],
+      "id": "e7367350-4e50-4b54-b6a7-3f6c5013c976",
+      "name": "Förbered text för TTS"
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "POST",
+        "url": "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": " audio/mpeg"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.apiBody }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        },
+        "infoMessage": ""
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2400,
+        688
+      ],
+      "id": "ec4329f6-5f7d-464b-9908-c68ac7033c27",
+      "name": "ElevenLabs TTS",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "AAizF12pLGawR4ST",
+          "name": "ElevenLabs API Key ("
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutGoogleDrive": "",
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $('Förbered text för TTS').item.json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root",
+          "cachedResultName": "/ (Root folder)"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2608,
+        688
+      ],
+      "id": "309c4111-6ece-4e22-a36e-501c3eb839f8",
+      "name": "Upload file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "VlPtBLCI9cRvodoV",
+          "name": "Google Drive account 2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Prepare Notion Archive (Val 2026) — arkiverar periodens lägesbild till Val2026-Teman.\n// Ersätter \"Prepare Notion Archive\". Skriver Datum/Sammanfattning/Teman/Vecka/Period så att\n// \"Parse Previous Themes\" kan läsa kontinuitet nästa körning. DATABASE_ID sätts av patch.py.\ntry {\n  const _mode = $('Detect Execution Mode').first().json;\n  if (_mode && _mode.shouldSendEmail === false) { return []; }  // hoppa i test-/exportläge\n} catch (e) {}\n\nconst config = $('Detect Execution Mode').first().json;\nconst synthesisData = $('Parse Synthesis Response').first().json;\nconst insights = synthesisData.aiInsights || {};\n\nfunction getWeekNumber(dateStr) {\n  const d = new Date(dateStr);\n  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));\n  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));\n  const y = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));\n  return Math.ceil((((t - y) / 86400000) + 1) / 7);\n}\nconst weekNumber = getWeekNumber(config.dateTo);\nconst year = new Date(config.dateTo).getFullYear();\n\n// Teman för kontinuitet: tema-titlar + flaggade narrativ (kort)\nconst themeNames = (insights.themes || []).map(t => t.title).filter(Boolean);\nconst flagNames = (insights.narrativeFlags || [])\n  .filter(f => (f.konfidens || '').toUpperCase() === 'FLAGGA')\n  .map(f => 'FLAGGA: ' + (f.pastaende || '').substring(0, 70));\nconst teman = [...themeNames, ...flagNames].slice(0, 10);\n\n// === DATABASE_ID sätts automatiskt av patch.py från notion.json ===\nconst DATABASE_ID = '38ea50aab0bd81a08d80d5778ce4f265';\n\nconst children = [];\nchildren.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Sammanfattning' } }] } });\nchildren.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: (insights.executiveSummary || 'Ingen sammanfattning.').substring(0, 2000) } }] } });\n\n// Fyra teman\n(insights.themes || []).forEach(t => {\n  const rt = [{ type: 'text', text: { content: (t.title || t.id || 'Tema') + ' [' + (t.trafikljus || '') + ', ' + (t.kontinuitet || '') + ']' }, annotations: { bold: true } }];\n  if (t.lagesbild) rt.push({ type: 'text', text: { content: '\\n' + t.lagesbild } });\n  if (t.utveckling && t.utveckling !== 'null') rt.push({ type: 'text', text: { content: '\\nSedan förra: ' + t.utveckling } });\n  children.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: rt } });\n});\n\n// Flaggade narrativ\nconst flags = insights.narrativeFlags || [];\nif (flags.length > 0) {\n  children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Källkritik — flaggade narrativ (' + flags.length + ')' } }] } });\n  flags.forEach(f => {\n    const rt = [{ type: 'text', text: { content: '[' + (f.konfidens || '?') + '] ' + (f.pastaende || '') }, annotations: { bold: true } }];\n    if (f.konfidensMotivering) rt.push({ type: 'text', text: { content: '\\n' + f.konfidensMotivering } });\n    children.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: rt } });\n  });\n}\n\nchildren.push({ object: 'block', type: 'divider', divider: {} });\nchildren.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: 'Genererad: ' + new Date().toLocaleString('sv-SE') + ' | Valbevakning 2026 | Arkiverad automatiskt' }, annotations: { italic: true, color: 'gray' } }] } });\n\nreturn [{\n  json: {\n    parent: { database_id: DATABASE_ID },\n    properties: {\n      'Namn': { title: [{ text: { content: 'Vecka ' + weekNumber + ', ' + year + ' — Valbevakning' } }] },\n      'Vecka': { number: weekNumber },\n      'Period': { rich_text: [{ text: { content: config.dateFrom + ' – ' + config.dateTo } }] },\n      'Datum': { date: { start: config.dateTo } },\n      'Sammanfattning': { rich_text: [{ text: { content: (insights.executiveSummary || '').substring(0, 2000) } }] },\n      'Teman': { multi_select: teman.map(t => ({ name: t.substring(0, 100) })) },\n    },\n    children: children.slice(0, 100),\n  },\n}];\n",
+        "notice": ""
+      },
+      "id": "7476d394-a8d5-4400-9216-f92e4ac16aef",
+      "name": "Prepare Notion Archive",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        944
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer __NOTION_TOKEN__"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
+        },
+        "infoMessage": ""
+      },
+      "id": "a89a0801-ac4d-4c26-bf55-43890a639887",
+      "name": "Archive to Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2400,
+        944
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutGoogleSheets": "",
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1mPGvxnrczZ0e3wtNtJwEZGUDoFB8SQ-s1pSGadlNs20",
+          "mode": "list",
+          "cachedResultName": "Domänkunskap CF",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1mPGvxnrczZ0e3wtNtJwEZGUDoFB8SQ-s1pSGadlNs20/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1mPGvxnrczZ0e3wtNtJwEZGUDoFB8SQ-s1pSGadlNs20/edit#gid=0"
+        },
+        "filtersUI": {},
+        "combineFilters": "AND",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        16,
+        928
+      ],
+      "id": "59dc69d9-e43d-433e-b29d-e5efda384b75",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OlbIZDcLgr5zQs8a",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\n  const items = $input.all();\n  const domainContext = {\n    mandate: [],\n    regulation: [],\n    priority: [],\n    limitation: [],\n    terminology: []\n  };\n\n  items.forEach(item => {\n    const row = item.json;\n    if (row.active === 'FALSE' || row.active === false) return;\n    const cat = (row.category || '').toLowerCase();\n    if (domainContext[cat]) {\n      domainContext[cat].push({\n        title: row.title || '',\n        content: row.content || '',\n        source: row.source || ''\n      });\n    }\n  });\n\n  let contextText = '=== DOMÄNKUNSKAP OM LÄNSSTYRELSEN (CIVILT FÖRSVAR) ===\\n\\n';\n\n  if (domainContext.mandate.length > 0) {\n    contextText += 'UPPDRAG OCH MANDAT:\\n';\n    domainContext.mandate.forEach(m => {\n      contextText += `- ${m.title}: ${m.content} (${m.source})\\n`;\n    });\n    contextText += '\\n';\n  }\n\n  if (domainContext.regulation.length > 0) {\n    contextText += 'STYRANDE FÖRORDNINGAR:\\n';\n    domainContext.regulation.forEach(r => {\n      contextText += `- ${r.title}: ${r.content} (${r.source})\\n`;\n    });\n    contextText += '\\n';\n  }\n\n  if (domainContext.priority.length > 0) {\n    contextText += 'AKTUELLA PRIORITERINGAR:\\n';\n    domainContext.priority.forEach(p => {\n      contextText += `- ${p.title}: ${p.content} (${p.source})\\n`;\n    });\n    contextText += '\\n';\n  }\n\n  if (domainContext.limitation.length > 0) {\n    contextText += 'BEGRÄNSNINGAR OCH AVGRÄNSNINGAR:\\n';\n    domainContext.limitation.forEach(l => {\n      contextText += `- ${l.title}: ${l.content} (${l.source})\\n`;\n    });\n    contextText += '\\n';\n  }\n\n  if (domainContext.terminology.length > 0) {\n    contextText += 'VIKTIG TERMINOLOGI:\\n';\n    domainContext.terminology.forEach(t => {\n      contextText += `- ${t.title}: ${t.content}\\n`;\n    });\n  }\n\n  return [{ json: { domainContext: contextText } }];",
+        "notice": ""
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        928
+      ],
+      "id": "cbca5422-ed07-4ae5-811f-8fc515667859",
+      "name": "Build Domain Context",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "leftValue": "={{ $('Detect Execution Mode').first().json.exportMode }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "looseTypeValidation": false,
+        "options": {}
+      },
+      "id": "cf-export-mode-check-01",
+      "name": "Export Mode Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1312,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "enableResponseOutput": false,
+        "generalNotice": "",
+        "respondWith": "json",
+        "webhookNotice": "",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "cf-respond-export-01",
+      "name": "Respond with Export",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1504,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "https://www.mtfa.se/om-oss/nyheter",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "mtfa-fetch-001",
+      "name": "Fetch MTFA News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        1104
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "https://www.mtfa.se/rapporter",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "mtfa-fetch-rapporter-001",
+      "name": "Fetch MTFA Rapporter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        1312
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Parse MTFA nyheter + rapporter (v11.1)\n// Input kommer via Merge MTFA Sources — alla items blandade\nconst allItems = $input.all();\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst results = [];\n\n// Samla all HTML-data från inputs\nlet newsHtml = '';\nlet rapporterHtml = '';\n\nallItems.forEach(item => {\n  const data = item.json.data || '';\n  if (!data) return;\n  // Identifiera vilken sida baserat på innehåll\n  if (data.includes('/nyheter/') && data.includes('datetime=')) {\n    newsHtml = data;\n  }\n  if (data.includes('/publikationer/')) {\n    rapporterHtml = data;\n  }\n});\n\n// Parsa nyheter\ntry {\n  const timeRegex = /<time\\s+datetime=\"([^\"]+)\"[^>]*>[^<]*<\\/time>[\\s\\S]*?<a\\s+href=\"(\\/nyheter\\/[^\"]+)\"[^>]*>([^<]+)<\\/a>/g;\n  let match;\n  while ((match = timeRegex.exec(newsHtml)) !== null) {\n    const pubDate = new Date(match[1]);\n    if (pubDate >= dateFrom && pubDate <= dateTo) {\n      results.push({\n        source: 'MTFA',\n        type: 'news',\n        title: match[3].trim(),\n        url: 'https://www.mtfa.se' + match[2],\n        date: pubDate.toISOString().split('T')[0],\n        excerpt: match[3].trim()\n      });\n    }\n  }\n} catch (e) {\n  console.error('MTFA nyheter parse error:', e);\n}\n\n// Parsa rapporter\ntry {\n  const pubRegex = /<a\\s+href=\"(\\/publikationer\\/[^\"]+)\"[^>]*>([^<]+)<\\/a>/g;\n  let match;\n  const seen = new Set();\n  while ((match = pubRegex.exec(rapporterHtml)) !== null) {\n    const url = 'https://www.mtfa.se' + match[1];\n    const title = match[2].trim();\n    if (title === 'Läs mer och ladda hem') continue;\n    if (seen.has(url)) continue;\n    seen.add(url);\n    results.push({\n      source: 'MTFA',\n      type: 'report',\n      title: title,\n      url: url,\n      date: '',\n      excerpt: title\n    });\n  }\n} catch (e) {\n  console.error('MTFA rapporter parse error:', e);\n}\n\nconst limited = results.slice(0, 10);\nreturn limited.length > 0 ? limited.map(r => ({ json: r })) : [{ json: { source: 'MTFA', isEmpty: true } }];",
+        "notice": ""
+      },
+      "id": "mtfa-parse-001",
+      "name": "Parse MTFA Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        1200
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      },
+      "id": "mtfa-merge-001",
+      "name": "Merge MTFA Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        112,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "https://omni.se/sitemap.xml",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "LST-VG-Veckorapport/1.0"
+            },
+            {
+              "name": "Accept",
+              "value": "application/xml,text/xml"
+            }
+          ]
+        },
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 15000
+        },
+        "infoMessage": ""
+      },
+      "id": "omni-fetch-omni-sitemap",
+      "name": "Fetch Omni Sitemap",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        0,
+        1184
+      ],
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Filter Omni-kandidater fran sitemap.xml mot tidsfonster och slug-tokens.\n// Token-baserad matching (bindestreck = ordgrans) for att undvika false positives\n// som \"hot\" -> \"hotellet\", \"fra\" -> \"fran\", \"kris\" -> \"kristna\".\n\nconst MAX_OMNI_CANDIDATES = 8;\n\nconst config = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(config.dateFrom);\nconst dateTo = new Date(config.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\n// EXACT_TOKENS: matchar ENBART som komplett slug-token (mellan bindestreck).\n// Ascii-normaliserade.\nconst EXACT_TOKENS = new Set([\n  // Forsvar / totalforsvar / beredskap\n  'forsvar','totalforsvar','civilforsvar','varnplikt','militar','militaer',\n  'hemvarn','folkforsvar','civilplikt','overstebefalhavare','beredskap',\n  // AI / cyber\n  'ai','artificiell','cyber','cyberattack','cyberattacker','cybersakerhet',\n  'cyberhot','hack','hackare','intrang','dataintrang','it-attack',\n  'desinformation','psyops','propaganda','deepfake','deepfakes','botnat',\n  // Stater / aktorer\n  'nato','natomedlemskap','ryssland','rysk','rysslands','ryska','ryssar',\n  'kina','kinas','kinesisk','kinesiska','ukraina','ukrainsk','ukrainas',\n  'iran','iransk','irans','nordkorea','nordkoreansk',\n  'putin','kreml','wagner','belarus','belarusisk',\n  'gaza','hamas','israel','israels','syrien','assad','assads','iran-stod',\n  'mellanostern','jemen','huthi',\n  // Svenska aktorer\n  'sapo','sakerhetspolisen','msb','fmv','foi','must','fra','mtfa',\n  'forsvarsmakten','forsvarsministern','overstebefal','svfo',\n  // Hot / hybrid / sabotage\n  'hybrid','hybridkrig','hybridhot','sabotage','sabotor',\n  'dronare','dron','dronattack','spion','spioneri','infiltration',\n  'attentat','terror','terrorattack','terrordad',\n  // Ostersjon / maritimt\n  'ostersjon','ostersjo','skuggflott','skuggflotta','skuggflottan',\n  'undervatten','sjokabel','sjokablar','nord-stream','nordstream','baltic',\n  // Kritisk infrastruktur\n  'infrastruktur','kraftverk','karnkraftverk','elnat','elproduktion',\n  'gasnat','gas','olja','oljepris','vattenverk','livsmedelsforsorjning',\n  'flygplats','telekom',\n  // Geopolitik / allianser\n  'allians','gransbevak','gransskydd','transatlantisk','transatlantiska',\n  'stoltenberg','rutte','eu-toppmote','eu-budget','eu-stod','g7','g20',\n  // Krig / kris / vapen\n  'krig','krigsforbrytelser','kris','krisberedskap','attack','attacken',\n  'attacker','vapen','vapensystem','vapensmuggl','luftvarn','ammunition',\n  'missil','missiler','robotar','stridsvagn','stridsvagnar','strids',\n  'varning','hotbild','hot',\n  // Inrikes sakerhet\n  'sakerhetsskydd','sakerhetsskyddsbrist','sakerhetsklassning','klassad',\n  'klassning','hemligstamplad','underrattelsetjanst','underrattelse'\n]);\n\n// PHRASE_PATTERNS: matchas mot full slug-strang (efter normalisering).\n// Anvands for fraser som spannar over flera tokens.\nconst PHRASE_PATTERNS = [\n  /\\beu-toppmote\\b/, /\\bnord-stream\\b/, /\\bvit-rysk/, /\\broda-havet\\b/,\n  /\\bsvart-hav\\b/, /\\bdraknase\\b/, /\\bfarligt-foremal\\b/, /\\bterrorhot\\b/\n];\n\nconst items = $input.all();\nconst raw = items[0]?.json;\nlet xmlText = '';\nif (typeof raw === 'string') xmlText = raw;\nelse if (raw?.data) xmlText = String(raw.data);\nelse if (raw?.body) xmlText = String(raw.body);\nelse xmlText = JSON.stringify(raw || '');\n\nconst urlBlocks = xmlText.match(/<url>[\\s\\S]*?<\\/url>/g) || [];\nconst candidates = [];\n\nurlBlocks.forEach(block => {\n  const locMatch = block.match(/<loc>([^<]+)<\\/loc>/);\n  const lastmodMatch = block.match(/<lastmod>([^<]+)<\\/lastmod>/);\n  if (!locMatch || !lastmodMatch) return;\n\n  const url = locMatch[1].trim();\n  const lastmod = new Date(lastmodMatch[1].trim());\n  if (isNaN(lastmod.getTime())) return;\n  if (!/\\/a\\/[A-Za-z0-9]+\\/?$/.test(url)) return;\n  if (lastmod < dateFrom || lastmod > dateTo) return;\n\n  const slugMatch = url.match(/^https?:\\/\\/omni\\.se\\/([^/]+)\\/a\\//);\n  if (!slugMatch) return;\n  const slug = slugMatch[1].toLowerCase();\n  const slugAscii = slug.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n\n  // Token-match: dela slug pa bindestreck, matcha mot EXACT_TOKENS\n  const tokens = slugAscii.split('-').filter(Boolean);\n  let matched = tokens.find(t => EXACT_TOKENS.has(t));\n\n  // Fall tillbaka pa frasmonster (extrahera ren strang ur regexp)\n  if (!matched) {\n    const phrase = PHRASE_PATTERNS.find(re => re.test(slugAscii));\n    if (phrase) {\n      const m = slugAscii.match(phrase);\n      matched = (m && m[0]) ? m[0] : 'phrase-match';\n    }\n  }\n\n  if (!matched) return;\n\n  candidates.push({\n    url,\n    slug,\n    lastmod: lastmod.toISOString(),\n    matchedKeyword: matched\n  });\n});\n\ncandidates.sort((a, b) => new Date(b.lastmod) - new Date(a.lastmod));\nconst limited = candidates.slice(0, MAX_OMNI_CANDIDATES);\n\nconsole.log(\n  'Omni: ' + candidates.length + ' kandidater, ' +\n  limited.length + ' fortsatter (max ' + MAX_OMNI_CANDIDATES + '). ' +\n  'Keywords: ' + [...new Set(limited.map(c => c.matchedKeyword))].join(', ')\n);\n\nif (limited.length === 0) {\n  return [{ json: { source: 'Omni', isEmpty: true } }];\n}\n\nreturn limited.map(c => ({ json: c }));",
+        "notice": ""
+      },
+      "id": "omni-filter-omni-candidates",
+      "name": "Filter Omni Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        1184
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "=https://r.jina.ai/{{ $json.url }}",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "sendBody": false,
+        "options": {
+          "timeout": 20000
+        },
+        "infoMessage": ""
+      },
+      "id": "omni-fetch-omni-article",
+      "name": "Fetch Omni Article",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        448,
+        1184
+      ],
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Parse Omni-artiklar fran Jina Reader-output (markdown).\n// Matchar samma output-schema som Parse Curated Articles.\n\nconst items = $input.all();\nconst originals = $('Filter Omni Candidates').all();\nconst parsed = [];\n\nitems.forEach((item, idx) => {\n  if (item.json.isEmpty) {\n    parsed.push(item);\n    return;\n  }\n\n  const original = originals[idx]?.json || {};\n\n  if (item.error || !item.json) {\n    parsed.push({\n      json: {\n        source: 'Omni',\n        type: 'omni',\n        title: '[Kunde inte hamtas]',\n        url: original.url || '',\n        date: original.lastmod || '',\n        category: original.matchedKeyword || 'omni',\n        excerpt: '[Artikelinnehall kunde inte hamtas]',\n        error: true\n      }\n    });\n    return;\n  }\n\n  // Jina Reader returnerar JSON med data.content (markdown) eller text\n  let content = '';\n  if (item.json.data && item.json.data.content) content = item.json.data.content;\n  else if (typeof item.json === 'string') content = item.json;\n  else if (item.json.content) content = item.json.content;\n\n  // Forsta H1 = titel; om ingen finns, ta forsta icke-tomma rad\n  let title = '';\n  const h1 = content.match(/^#\\s+(.+)$/m);\n  if (h1) {\n    title = h1[1].trim();\n  } else {\n    const firstLine = content.split('\\n').map(s => s.trim()).find(s => s.length > 0);\n    title = (firstLine || '').replace(/^#+\\s*/, '').substring(0, 200);\n  }\n\n  // Excerpt: forsta 500 tecken efter rubrik, rensa markdown\n  const afterTitle = h1 ? content.substring(content.indexOf(h1[0]) + h1[0].length) : content;\n  const excerpt = afterTitle\n    .replace(/^#+\\s.*$/gm, '')        // hoppa underrubriker\n    .replace(/!\\[[^\\]]*\\]\\([^)]+\\)/g, '')  // bilder\n    .replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1')  // lankar -> text\n    .replace(/[*_`]+/g, '')\n    .replace(/\\n{2,}/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .substring(0, 500);\n\n  parsed.push({\n    json: {\n      source: 'Omni',\n      type: 'omni',\n      title: title || '[Utan titel]',\n      url: original.url || '',\n      date: original.lastmod || '',\n      category: original.matchedKeyword || 'omni',\n      excerpt,\n      fullContent: content.substring(0, 2000),\n      error: false\n    }\n  });\n});\n\nreturn parsed;",
+        "notice": ""
+      },
+      "id": "omni-parse-omni-articles",
+      "name": "Parse Omni Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        1184
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://josben.app.n8n.cloud/webhook/category-1-mini-v3",
+        "authentication": "none",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"dateFrom\": \"{{ $('Detect Execution Mode').item.json.dateFrom }}\",\n  \"dateTo\": \"{{ $('Detect Execution Mode').item.json.dateTo }}\"\n}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "name": "Fetch category-1 v3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2976,
+        2160
+      ],
+      "id": "832982c4-98c0-4221-a2f8-027d24b39381",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $json;\nif (!response || !response.success || !Array.isArray(response.items)) {\n  return [{ json: { source: 'category-1', isEmpty: true } }];\n}\nconst out = [];\nconst seenUrls = new Set();\nfor (const item of response.items) {\n  if (!item || !item.url || seenUrls.has(item.url)) continue;\n  seenUrls.add(item.url);\n  const sourceMap = {\n    'PTS':'PTS','MSB':'MSB','Försvarsmakten':'Försvarsmakten','FOI':'FOI','Energimyndigheten':'Energimyndigheten',\n  };\n  const source = sourceMap[item.source] || item.source;\n  out.push({\n    source, type: item.type || 'news', title: item.title || '',\n    url: item.url, date: item.date || '', excerpt: item.excerpt || '',\n    fromCategory1: true,\n  });\n}\nif (out.length === 0) return [{ json: { source: 'category-1', isEmpty: true } }];\nreturn out.map(o => ({ json: o }));"
+      },
+      "name": "Split category-1 items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        2160
+      ],
+      "id": "844c73f1-8ae3-4777-89c1-86fd0e3edf26"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://r.jina.ai/https://www.energimyndigheten.se/energisystem-och-analys/nulaget-i-energisystemet/sveriges-energilage-just-nu/",
+        "authentication": "none",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "name": "Fetch Energimyndigheten Energiläge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2976,
+        2720
+      ],
+      "id": "930db507-0fd8-488b-a212-7292f8e59b23",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $json;\nlet content = '';\nif (response.data && response.data.content) content = response.data.content;\nelse if (typeof response === 'string') content = response;\nelse if (response.content) content = response.content;\nelse if (response.body) content = response.body;\nif (!content) return [{ json: { source: 'Energimyndigheten Energiläge', isEmpty: true } }];\n\nlet date = '';\nconst dateMatch = content.match(/(?:uppdaterad|senast\\s+uppdaterad|publicerad)[^\\d]{0,30}(\\d{4}-\\d{2}-\\d{2})/i);\nif (dateMatch) date = dateMatch[1];\nif (!date) {\n  const isoMatch = content.match(/(20\\d{2}-\\d{2}-\\d{2})/);\n  if (isoMatch) date = isoMatch[1];\n}\nif (!date) date = new Date().toISOString().split('T')[0];\n\nconst warningKeywords = ['varning','höjd beredskap','energikris','effektbrist','elbrist','allvarlig'];\nconst lowered = content.toLowerCase();\nconst flags = warningKeywords.filter(k => lowered.includes(k));\n\nconst truncated = content.length > 6000 ? content.substring(0, 6000) + '\\n\\n[trunkerad]' : content;\nreturn [{ json: {\n  source: 'Energimyndigheten Energiläge',\n  type: 'situation_report',\n  title: 'Sveriges energiläge just nu (Energimyndigheten)',\n  url: 'https://www.energimyndigheten.se/energisystem-och-analys/nulaget-i-energisystemet/sveriges-energilage-just-nu/',\n  date,\n  excerpt: truncated.substring(0, 400),\n  fulltext: truncated,\n  flags,\n} }];"
+      },
+      "name": "Parse Energiläge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        2720
+      ],
+      "id": "3c4a435b-6f3e-41c1-8a01-4aa2dc66fb50"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b4864160-4477-4f67-8fec-2934997ccef1",
+              "name": "hormuzActive",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "18344c99-9587-48e9-8e20-4283bebea171",
+              "name": "hormuzSectionTitle",
+              "value": "Energisäkerhet — Hormuz-implikationer",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Hormuz Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2752,
+        2880
+      ],
+      "id": "0bcba028-f280-463b-a692-fd8e98f7dd33"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://r.jina.ai/https://tradingeconomics.com/commodity/brent-crude-oil",
+        "authentication": "none",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "name": "Fetch Brent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2976,
+        2880
+      ],
+      "id": "c45114a1-9883-41c2-83fe-42f62d80ff1d",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://r.jina.ai/https://tradingeconomics.com/commodity/eu-natural-gas",
+        "authentication": "none",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "name": "Fetch TTF Gas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2976,
+        2960
+      ],
+      "id": "1422e265-5110-41af-a588-ad9b64bfbbb8",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://r.jina.ai/https://tradingeconomics.com/commodity/urea",
+        "authentication": "none",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "name": "Fetch Urea",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2976,
+        3040
+      ],
+      "id": "05b6a802-f092-4699-af55-7170da8a7d76",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $json;\nlet content = '';\nif (response.data && response.data.content) content = response.data.content;\nelse if (typeof response === 'string') content = response;\nelse if (response.content) content = response.content;\nelse if (response.body) content = response.body;\nif (!content) return [{ json: { source: \"Hormuz/Brent\", isEmpty: true, commodity: \"brent\" } }];\n\nlet lastPrice = '', unit = '';\nconst priceMatch = content.match(/(\\d{1,4}[.,]?\\d{0,4})\\s*(USD|EUR|US Dollar|Euro)\\s*\\/?\\s*([A-Za-z]{2,5})?/i);\nif (priceMatch) {\n  lastPrice = priceMatch[1];\n  unit = (priceMatch[2] + (priceMatch[3] ? '/' + priceMatch[3] : '')).trim();\n}\n\nconst changeRegex = /(1\\s*[DWM]|YTD|1Y)[^%\\n]{0,20}([+\\-]?\\d{1,3}[.,]?\\d{0,3})\\s*%/gi;\nlet m; const changes = {};\nwhile ((m = changeRegex.exec(content)) !== null) {\n  const k = m[1].replace(/\\s+/g, '').toUpperCase();\n  changes[k] = m[2];\n}\nif (!lastPrice && !changes['1W']) return [{ json: { source: \"Hormuz/Brent\", isEmpty: true, commodity: \"brent\" } }];\n\nreturn [{ json: {\n  source: \"Hormuz/Brent\",\n  commodity: \"brent\",\n  type: 'price_tracker',\n  label: \"Brent\",\n  lastPrice, unit,\n  change1D: changes['1D'] || '',\n  change1W: changes['1W'] || '',\n  change1M: changes['1M'] || '',\n  change1Y: changes['1Y'] || '',\n  fetchedAt: new Date().toISOString(),\n} }];"
+      },
+      "name": "Parse Brent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        2880
+      ],
+      "id": "8551927f-1b54-42fb-a987-8420ddbdee17"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $json;\nlet content = '';\nif (response.data && response.data.content) content = response.data.content;\nelse if (typeof response === 'string') content = response;\nelse if (response.content) content = response.content;\nelse if (response.body) content = response.body;\nif (!content) return [{ json: { source: \"Hormuz/TTF Gas\", isEmpty: true, commodity: \"ttf\" } }];\n\nlet lastPrice = '', unit = '';\nconst priceMatch = content.match(/(\\d{1,4}[.,]?\\d{0,4})\\s*(USD|EUR|US Dollar|Euro)\\s*\\/?\\s*([A-Za-z]{2,5})?/i);\nif (priceMatch) {\n  lastPrice = priceMatch[1];\n  unit = (priceMatch[2] + (priceMatch[3] ? '/' + priceMatch[3] : '')).trim();\n}\n\nconst changeRegex = /(1\\s*[DWM]|YTD|1Y)[^%\\n]{0,20}([+\\-]?\\d{1,3}[.,]?\\d{0,3})\\s*%/gi;\nlet m; const changes = {};\nwhile ((m = changeRegex.exec(content)) !== null) {\n  const k = m[1].replace(/\\s+/g, '').toUpperCase();\n  changes[k] = m[2];\n}\nif (!lastPrice && !changes['1W']) return [{ json: { source: \"Hormuz/TTF Gas\", isEmpty: true, commodity: \"ttf\" } }];\n\nreturn [{ json: {\n  source: \"Hormuz/TTF Gas\",\n  commodity: \"ttf\",\n  type: 'price_tracker',\n  label: \"TTF Gas\",\n  lastPrice, unit,\n  change1D: changes['1D'] || '',\n  change1W: changes['1W'] || '',\n  change1M: changes['1M'] || '',\n  change1Y: changes['1Y'] || '',\n  fetchedAt: new Date().toISOString(),\n} }];"
+      },
+      "name": "Parse TTF Gas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        2960
+      ],
+      "id": "d985d64f-179e-4db5-b314-eeb988677268"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $json;\nlet content = '';\nif (response.data && response.data.content) content = response.data.content;\nelse if (typeof response === 'string') content = response;\nelse if (response.content) content = response.content;\nelse if (response.body) content = response.body;\nif (!content) return [{ json: { source: \"Hormuz/Urea\", isEmpty: true, commodity: \"urea\" } }];\n\nlet lastPrice = '', unit = '';\nconst priceMatch = content.match(/(\\d{1,4}[.,]?\\d{0,4})\\s*(USD|EUR|US Dollar|Euro)\\s*\\/?\\s*([A-Za-z]{2,5})?/i);\nif (priceMatch) {\n  lastPrice = priceMatch[1];\n  unit = (priceMatch[2] + (priceMatch[3] ? '/' + priceMatch[3] : '')).trim();\n}\n\nconst changeRegex = /(1\\s*[DWM]|YTD|1Y)[^%\\n]{0,20}([+\\-]?\\d{1,3}[.,]?\\d{0,3})\\s*%/gi;\nlet m; const changes = {};\nwhile ((m = changeRegex.exec(content)) !== null) {\n  const k = m[1].replace(/\\s+/g, '').toUpperCase();\n  changes[k] = m[2];\n}\nif (!lastPrice && !changes['1W']) return [{ json: { source: \"Hormuz/Urea\", isEmpty: true, commodity: \"urea\" } }];\n\nreturn [{ json: {\n  source: \"Hormuz/Urea\",\n  commodity: \"urea\",\n  type: 'price_tracker',\n  label: \"Urea\",\n  lastPrice, unit,\n  change1D: changes['1D'] || '',\n  change1W: changes['1W'] || '',\n  change1M: changes['1M'] || '',\n  change1Y: changes['1Y'] || '',\n  fetchedAt: new Date().toISOString(),\n} }];"
+      },
+      "name": "Parse Urea",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        3040
+      ],
+      "id": "58867808-0999-4234-868c-0dfb2180c615"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      },
+      "name": "Merge Hormuz Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3424,
+        2960
+      ],
+      "id": "3413bfdb-5359-469f-89f2-98fc15d84247"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const active = $('Set Hormuz Config').first().json.hormuzActive === true;\nif (!active) return [{ json: { hormuzActive: false, hormuzItems: [] } }];\n\n// Behåll ALLA items (även isEmpty), men flagga vilka som har faktisk data\nconst allItems = $input.all().map(i => i.json);\nconst validItems = allItems.filter(j => j && !j.isEmpty && j.lastPrice);\n\nreturn [{\n  json: {\n    hormuzActive: true,\n    hormuzSectionTitle: $('Set Hormuz Config').first().json.hormuzSectionTitle,\n    hormuzItems: validItems,\n    hormuzAttempted: allItems.length,\n    hormuzFetchedOk: validItems.length,\n  }\n}];"
+      },
+      "name": "Filter Hormuz Active",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3648,
+        2960
+      ],
+      "id": "e2ae9fdf-054c-49e6-b75b-e32114faa8ac"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://r.jina.ai/https://www.foi.se/rapporter.html",
+        "authentication": "none",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "name": "Fetch FOI Rapporter Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2976,
+        2800
+      ],
+      "id": "2c097ff1-3255-4330-8511-26ab21b9c18f",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Parser för FOI:s rapporter.html (Jina-rendrad markdown).\n// Letar efter FOI-R--XXXX--SE och FOI Memo XXXX, fångar närliggande titlar och datum.\nconst response = $json;\nlet content = '';\nif (response.data && response.data.content) content = response.data.content;\nelse if (typeof response === 'string') content = response;\nelse if (response.content) content = response.content;\nelse if (response.body) content = response.body;\n\nif (!content) return [{ json: { source: 'FOI', isEmpty: true } }];\n\nconst items = [];\nconst seen = new Set();\nconst lines = content.split(/\\r?\\n/);\n\nconst reportRegex = /(FOI(?:-R--|\\s+Memo\\s+)\\d{3,5}(?:--SE)?)/g;\nconst dateRegex = /(\\d{4}-\\d{2}-\\d{2})/;\n\nfor (let i = 0; i < lines.length; i++) {\n  const line = lines[i];\n  const reportMatches = [...line.matchAll(reportRegex)];\n  if (reportMatches.length === 0) continue;\n\n  for (const m of reportMatches) {\n    const reportNo = m[1].replace(/\\s+/g, ' ').trim();\n    if (seen.has(reportNo)) continue;\n    seen.add(reportNo);\n\n    // Bygg URL — FOI-R rapporter har rapportsammanfattning.html\n    let url = '';\n    if (/^FOI-R--/.test(reportNo)) {\n      url = 'https://www.foi.se/rapporter/rapportsammanfattning.html?reportNo=' + encodeURIComponent(reportNo);\n    } else {\n      // FOI Memo har annan URL — fallback till sök\n      url = 'https://www.foi.se/sok-publikationer.html?query=' + encodeURIComponent(reportNo);\n    }\n\n    // Försök hitta länk i samma rad\n    const linkMatch = line.match(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\)]+)\\)/);\n    if (linkMatch && linkMatch[2].includes(reportNo)) url = linkMatch[2];\n\n    // Titel: kolla samma rad eller närliggande\n    let title = '';\n    // Samma rad — text efter rapportnumret\n    const afterNo = line.substring(line.indexOf(reportNo) + reportNo.length).replace(/^[\\s:\\-—]+/, '').trim();\n    if (afterNo && afterNo.length > 5 && afterNo.length < 250) title = afterNo.replace(/[\\[\\]\\(\\)#]/g, '').trim();\n    // Om inte titel — kolla föregående rad\n    if (!title && i > 0) {\n      const prev = lines[i - 1].trim();\n      if (prev && prev.length > 5 && prev.length < 250 && !prev.match(reportRegex)) title = prev.replace(/^[\\#\\*\\-\\s]+/, '').trim();\n    }\n    if (!title) title = reportNo;\n\n    // Datum: i samma rad eller ±3\n    let date = '';\n    for (let j = Math.max(0, i - 3); j <= Math.min(lines.length - 1, i + 3); j++) {\n      const dm = lines[j].match(dateRegex);\n      if (dm) { date = dm[1]; break; }\n    }\n\n    items.push({\n      source: 'FOI',\n      type: 'report',\n      reportNo,\n      title,\n      url,\n      date,\n      excerpt: title,\n    });\n    if (items.length >= 20) break;\n  }\n  if (items.length >= 20) break;\n}\n\nif (items.length === 0) return [{ json: { source: 'FOI', isEmpty: true } }];\nreturn items.map(it => ({ json: it }));"
+      },
+      "name": "Parse FOI Rapporter Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        2800
+      ],
+      "id": "8d2d434b-d394-4f43-aaf2-f3d754070ac2"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Riksdag/Regering — beräknar from/tom (senaste 7 dagar)\n// samt calFrom/calTom (kommande 7 dagar) från Detect Execution Mode.\nconst cfg = $('Detect Execution Mode').first().json;\nconst tom = cfg.dateTo || new Date().toISOString().slice(0,10);\nconst from = cfg.dateFrom || new Date(Date.now()-7*86400000).toISOString().slice(0,10);\nconst calFrom = new Date().toISOString().slice(0,10);\nconst calTom = new Date(Date.now()+7*86400000).toISOString().slice(0,10);\nreturn [{ json: { from, tom, calFrom, calTom } }];\n",
+        "notice": ""
+      },
+      "id": "a1f00001-r1ks-d4g-0001-comput3date00",
+      "name": "Compute Riksdag Date Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1280
+      ]
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "=https://data.riksdagen.se/dokumentlista/?sok=&doktyp=bet,prop&from={{ $json.from }}&tom={{ $json.tom }}&sort=datum&sortorder=desc&utformat=json&sz=100",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        },
+        "infoMessage": ""
+      },
+      "id": "a1f00002-r1ks-d4g-0002-fetchdocs0000",
+      "name": "Fetch Riksdag Documents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        224,
+        1200
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "=https://data.riksdagen.se/voteringlista/?sz=100&from={{ $json.from }}&tom={{ $json.tom }}&utformat=json",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        },
+        "infoMessage": ""
+      },
+      "id": "a1f00003-r1ks-d4g-0003-fetchvotes000",
+      "name": "Fetch Riksdag Votes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        224,
+        1320
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "preBuiltAgentsCalloutHttpRequest": "",
+        "curlImport": "",
+        "method": "GET",
+        "url": "=https://data.riksdagen.se/kalender/?from={{ $json.calFrom }}&tom={{ $json.calTom }}&utformat=json",
+        "authentication": "none",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        },
+        "infoMessage": ""
+      },
+      "id": "a1f00004-r1ks-d4g-0004-fetchcal00000",
+      "name": "Fetch Riksdag Calendar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        224,
+        1440
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Parse Riksdag Documents (Val 2026) — betänkanden + propositioner senaste 7 dagar.\n// Ersätter \"Parse Riksdag Documents\". KW-regexen omriktad från försvar till val/demokrati:\n// dokumenten hämtas brett (bet,prop) och rankas på _kwHit i syntesen.\nconst r = $json || {};\nconst list = (r.dokumentlista && r.dokumentlista.dokument) || [];\n// Valrelaterade nyckelord (undviker bara \"val\" som matchar för brett).\nconst KW = /vallag|riksdagsval|allmänna val|valdag|valsedel|valsedlar|valdistrikt|valnämnd|valmyndighet|valfusk|valsäkerhet|valdeltagande|valrörelse|valhemlighet|valobservat|valresultat|valpåverkan|rösträkn|rösträtt|röstning|röstmottag|förtidsröst|valbarhet|demokrat|partistöd|partibidrag|desinformation|påverkanskampanj|informationspåverkan/i;\nconst items = list.map(x => {\n  const titel = x.titel || x.notisrubrik || '';\n  const summary = x.summary || x.notis || '';\n  return {\n    dokId: x.id || x.dok_id,\n    doktyp: (x.doktyp || '').toLowerCase(),\n    beteckning: x.beteckning || '',\n    titel: titel,\n    datum: (x.datum || '').slice(0, 10),\n    url: (function (u) { return (u && u.indexOf('//') === 0) ? 'https:' + u : u; })(x.dokument_url_html || x.dokument_url_text || ''),\n    excerpt: (summary || '').replace(/<[^>]+>/g, '').trim().slice(0, 400),\n    _kwHit: KW.test(titel + ' ' + summary),\n  };\n}).filter(d => d.titel);\nreturn items.length > 0 ? items.map(d => ({ json: d })) : [{ json: { source: 'Riksdag-docs', isEmpty: true } }];\n",
+        "notice": ""
+      },
+      "id": "a1f00005-r1ks-d4g-0005-parsedocs0000",
+      "name": "Parse Riksdag Documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Parse Riksdag Votes — gruppera per votering_id (en post per ledamot)\nconst r = $json || {};\nconst list = (r.voteringlista && r.voteringlista.votering) || [];\nconst seen = new Map();\nlist.forEach(v => {\n  const id = v.votering_id;\n  if (!id || seen.has(id)) return;\n  seen.set(id, {\n    voteringId: id,\n    beteckning: v.beteckning || '',\n    punkt: v.punkt || '',\n    rm: v.rm || '',\n    datum: (v.systemdatum || v.datum || '').slice(0,10),\n    avser: v.avser || '',\n    titel: v.titel || '',\n  });\n});\nconst items = Array.from(seen.values());\nreturn items.length > 0 ? items.map(v => ({ json: v })) : [{ json: { source: 'Riksdag-votes', isEmpty: true } }];\n",
+        "notice": ""
+      },
+      "id": "a1f00006-r1ks-d4g-0006-parsevotes000",
+      "name": "Parse Riksdag Votes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        1320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Parse Riksdag Calendar — kommande 7 dagar, sorterat stigande\nconst r = $json || {};\nconst list = (r.kalenderlista && r.kalenderlista.kalender) || [];\nconst items = list.map(c => ({\n  datum: (c.datum || '').slice(0,10),\n  organ: c.org || c.organ || '',\n  aktivitet: c.aktivitet || c.typ || '',\n  plats: c.lokal || c.plats || '',\n  summary: (c.summary || c.titel || '').replace(/<[^>]+>/g,'').trim().slice(0,300),\n})).filter(c => c.datum);\nitems.sort((a,b) => a.datum.localeCompare(b.datum));\nreturn items.length > 0 ? items.map(c => ({ json: c })) : [{ json: { source: 'Riksdag-cal', isEmpty: true } }];\n",
+        "notice": ""
+      },
+      "id": "a1f00007-r1ks-d4g-0007-parsecal00000",
+      "name": "Parse Riksdag Calendar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        1440
+      ]
+    },
+    {
+      "id": "fas3-source-config",
+      "name": "Source Config (Fas 3)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2976,
+        2240
+      ],
+      "parameters": {
+        "jsCode": "// Source Config (Val 2026) — konsoliderade valbevakningskällor.\n// Ersätter \"Source Config (Fas 3)\" i den klonade workflowen.\n// NY KÄLLA = EN RAD HÄR. parser: 'jina' (markdown-skrap) | 'rss' (RSS/Atom) | 'hybridcoe' (HTML-kort).\n// sourceKey används i \"Aggregate All Results\" för gruppering.\n// Alla källor är nationella. VG-relevans sätts av VG-flaggan (termmatch) i Aggregate,\n// inte per källa — bevakningen är nationell med VG som sekundär flagga.\n//\n// VERIFIERA myndighets-URL:erna med curl före deploy (CLAUDE-regel 02/03). Döda URL:er\n// ger tyst tomhet (onError: continueRegularOutput) — bryter inte flödet, men ger inget värde.\nconst sources = [\n  // --- Nyhetsmedier (rikstäckande + VG) — RSS bekräftade ---\n  { sourceKey: 'svt',        label: 'SVT Nyheter',      parser: 'rss', url: 'https://www.svt.se/nyheter/rss.xml',              maxItems: 25 },\n  { sourceKey: 'svtvast',    label: 'SVT Västnytt',     parser: 'rss', url: 'https://www.svt.se/nyheter/lokalt/vast/rss.xml', maxItems: 15 },\n  { sourceKey: 'gp',         label: 'Göteborgs-Posten', parser: 'rss', url: 'https://www.gp.se/rss',                           maxItems: 20 },\n\n  // Riksdag/regering: ingen separat nyhets-RSS finns (riksdagen.se/sv/rss → 404). Riksdagen\n  // täcks i stället av Fetch/Parse Riksdag Documents + Calendar (data.riksdagen.se). Ingen rad här.\n\n  // --- Officiella valmyndigheter (genomförande, regler, resultat) ---\n  // VERIFIERA URL före deploy (val.se publicerar prel. resultat från kl 21 på valkvällen):\n  { sourceKey: 'valmynd',    label: 'Valmyndigheten', parser: 'jina', url: 'https://r.jina.ai/https://www.val.se/',                         maxItems: 12, maxUndated: 6, urlInclude: '/(nyheter|aktuellt|press)/.' },\n\n  // --- Säkerhet & påverkansbevakning (kärnan i uppdraget — stödjer tema 2 + 4 + källkritik) ---\n  { sourceKey: 'mpf',        label: 'Myndigheten för psykologiskt försvar', parser: 'jina', url: 'https://r.jina.ai/https://www.mpf.se/aktuellt/', maxItems: 12, maxUndated: 6 },\n  { sourceKey: 'msb',        label: 'MSB',            parser: 'jina', url: 'https://r.jina.ai/https://www.msb.se/sv/aktuellt/nyheter/',      maxItems: 12, maxUndated: 6, urlInclude: '/nyheter/' },\n  // Säpo: aktuellt-sida (curl-verifierad 200). JS-rendering kan dock ge tomhet via jina.\n  { sourceKey: 'sapo',       label: 'Säkerhetspolisen', parser: 'jina', url: 'https://r.jina.ai/https://www.sakerhetspolisen.se/aktuellt.html', maxItems: 10, maxUndated: 6, urlInclude: '/(nyheter|aktuellt|pressrum)/.' },\n  // FOI: ingen RSS (foi.se/rss → 404). Skrapar nyhets-/pressidan via jina (curl-verifierad 200).\n  { sourceKey: 'foi',        label: 'FOI',            parser: 'jina', url: 'https://r.jina.ai/https://www.foi.se/nyheter-och-press.html', maxItems: 12, maxUndated: 6, urlInclude: '/nyheter' },\n  { sourceKey: 'certse',     label: 'CERT-SE',        parser: 'rss', url: 'https://www.cert.se/feed.rss',   maxItems: 10 },\n  // EUvsDisinfo (EEAS East StratCom) — internationella påverkansnätverk. VERIFIERA feed-URL:\n  { sourceKey: 'euvsdisinfo',label: 'EUvsDisinfo',    parser: 'rss', url: 'https://euvsdisinfo.eu/feed/',  maxItems: 12 },\n];\n// EJ webbflöden (manuellt/internt underlag — dokumenterat i BUILD.md):\n//  - Länsstyrelsens egna regionala valfunktion + kommunernas valnämnder (internt VG-läge).\n//  - Faktagranskning (Källkritikbyrån/Faktiskt/AFP) används REAKTIVT vid verifiering per OSINT-arbetsflödet.\n//  - Bred opinion (SCB PSU, Valforskningsprogrammet GU, poll of polls) — medvetet utanför scope\n//    (Malins avgränsning). Hämta vid behov från primärkälla, inte mediers sammanvägningar.\nreturn sources.map(s => ({ json: s }));\n"
+      }
+    },
+    {
+      "id": "fas3-fetch-source",
+      "name": "Fetch Source (Fas 3)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2976,
+        2480
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "={{ $json.parser === 'jina' ? 'application/json' : 'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.7' }}"
+            },
+            {
+              "name": "X-Return-Format",
+              "value": "markdown"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000
+        }
+      }
+    },
+    {
+      "id": "fas3-parse-sources",
+      "name": "Parse Sources (Fas 3)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        2480
+      ],
+      "parameters": {
+        "jsCode": "// Parse Sources (Fas 3) 2026-06-10 — gemensam parser för konsoliderade källor.\n// jina: markdownlänk-parser (SÄPO/FRA/FHS/SSM/KBV). FIX: odaterade poster cappas\n//   till maxUndated (tidigare fylldes 12-taket med navlänkar utanför datumfönstret).\n// rss: generisk RSS/Atom (CERT-SE, IMY, AI Sweden, EU digital-strategy) — strikt datumfilter.\n// hybridcoe: HTML-kortparser (liftup-title/liftup-date) för hybridcoe.fi.\n// Vid HTTP-fel: sourceUnavailable-markör (Fas 1-mekanismen) i stället för krasch.\n\nconst configs = $('Source Config (Fas 3)').all().map(i => i.json);\nconst responses = $input.all();\nconst mode = $('Detect Execution Mode').first().json;\nconst dateFrom = new Date(mode.dateFrom);\nconst dateTo = new Date(mode.dateTo);\ndateTo.setHours(23, 59, 59, 999);\n\nconst monthMap = {januari:1,februari:2,mars:3,april:4,maj:5,juni:6,juli:7,augusti:8,september:9,oktober:10,november:11,december:12};\nconst MONTHS_RX = 'januari|februari|mars|april|maj|juni|juli|augusti|september|oktober|november|december';\n\nfunction parseDate(s) {\n  if (!s) return null;\n  s = String(s).trim();\n  if (/^\\d{4}-\\d{2}-\\d{2}/.test(s)) return new Date(s.substring(0, 10));\n  let m = s.match(new RegExp('(\\\\d{1,2})\\\\s+(' + MONTHS_RX + ')\\\\s+(\\\\d{4})', 'i'));\n  if (m) return new Date(Date.UTC(+m[3], monthMap[m[2].toLowerCase()] - 1, +m[1]));\n  m = s.match(/^(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})$/);\n  if (m) return new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));\n  const d = new Date(s);\n  return isNaN(d.getTime()) ? null : d;\n}\nconst inWindow = (d) => d && d >= dateFrom && d <= dateTo;\nconst isoDay = (d) => d.toISOString().split('T')[0];\nfunction stripTags(s) {\n  return (s || '').replace(/<!\\[CDATA\\[|\\]\\]>/g, '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '\"').replace(/&#0?39;/g, \"'\").replace(/\\s+/g, ' ').trim();\n}\n\nfunction parseJina(content, cfg) {\n  const items = [];\n  const seen = new Set();\n  const lines = content.split(/\\r?\\n/);\n  let undated = 0;\n  for (let i = 0; i < lines.length; i++) {\n    const lm = lines[i].match(/\\[([^\\]]{8,200})\\]\\((https?:[^\\)]+)\\)/);\n    if (!lm) continue;\n    const title = lm[1].trim();\n    const url = lm[2].trim();\n    if (/^(Läs mer|Mer info|Kontakt|Sök|Logga in|Hem|Tillbaka|Föregående|Nästa|Relevans|Datum|Sortera.*)$/i.test(title)) continue;\n    // Skräpfilter v2: cookie-/navigations-/policylänkar som annars äter undated-cappen\n    if (/cookie|kakor|integritetspolicy|personuppgift|tillgänglighet|teckenspråk|lättläst|in english|om webbplatsen|prenumerera|webbkarta|till innehållet|gå direkt till|textinnehållet|microsoft azure|google analytics/i.test(title)) continue;\n    if (/^(#|tel:|mailto:|javascript:)/.test(url)) continue;\n    if (/policies\\.google|cookieinformation|youtube\\.com|facebook\\.com|linkedin\\.com|twitter\\.com|instagram\\.com/i.test(url)) continue;\n    if (seen.has(url)) continue;\n    seen.add(url);\n    // Per-källa URL-mönster: endast artikellänkar räknas\n    if (cfg.urlInclude && !(new RegExp(cfg.urlInclude, 'i')).test(url)) continue;\n    let dateStr = '';\n    for (let j = Math.max(0, i - 3); j <= Math.min(lines.length - 1, i + 3); j++) {\n      const m = lines[j].match(/(\\d{4}-\\d{2}-\\d{2})/) ||\n                lines[j].match(new RegExp('(\\\\d{1,2}\\\\s+(?:' + MONTHS_RX + ')\\\\s+\\\\d{4})', 'i'));\n      if (m) { dateStr = m[1]; break; }\n    }\n    const date = parseDate(dateStr);\n    let excerpt = '';\n    for (let j = i + 1; j <= Math.min(lines.length - 1, i + 4); j++) {\n      const l = lines[j].trim();\n      if (l && !l.startsWith('[') && !l.startsWith('#') && !l.startsWith('---') && l.length > 30) {\n        excerpt = l.substring(0, 280); break;\n      }\n    }\n    if (date) {\n      if (!inWindow(date)) continue;\n    } else {\n      if (undated >= (cfg.maxUndated || 0)) continue;\n      undated++;\n    }\n    items.push({ sourceKey: cfg.sourceKey, source: cfg.label, type: 'news', title, url, date: date ? isoDay(date) : '', excerpt });\n    if (items.length >= cfg.maxItems) break;\n  }\n  return items;\n}\n\nfunction parseRss(xml, cfg) {\n  const items = [];\n  const blocks = [...xml.matchAll(/<item[\\s>][\\s\\S]*?<\\/item>|<entry[\\s>][\\s\\S]*?<\\/entry>/g)].map(m => m[0]);\n  for (const b of blocks) {\n    const title = stripTags((b.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/) || [])[1] || '');\n    let url = '';\n    const linkHref = b.match(/<link[^>]*href=\"([^\"]+)\"/);\n    const linkText = b.match(/<link[^>]*>([\\s\\S]*?)<\\/link>/);\n    if (linkHref) url = linkHref[1].trim();\n    else if (linkText) url = stripTags(linkText[1]);\n    const dateRaw = (b.match(/<pubDate>([\\s\\S]*?)<\\/pubDate>/) || b.match(/<published>([\\s\\S]*?)<\\/published>/) ||\n                     b.match(/<updated>([\\s\\S]*?)<\\/updated>/) || b.match(/<dc:date>([\\s\\S]*?)<\\/dc:date>/) || [])[1] || '';\n    const date = parseDate(stripTags(dateRaw));\n    if (!inWindow(date)) continue;\n    if (!title || !url) continue;\n    const desc = (b.match(/<description>([\\s\\S]*?)<\\/description>/) || b.match(/<summary[^>]*>([\\s\\S]*?)<\\/summary>/) || [])[1] || '';\n    items.push({ sourceKey: cfg.sourceKey, source: cfg.label, type: 'news', title, url, date: isoDay(date), excerpt: stripTags(desc).substring(0, 280) });\n    if (items.length >= cfg.maxItems) break;\n  }\n  return items;\n}\n\nfunction parseHybridcoe(html, cfg) {\n  const items = [];\n  const chunks = html.split('<a href=\"').slice(1);\n  for (const c of chunks) {\n    const url = c.substring(0, c.indexOf('\"'));\n    if (!/^https:\\/\\/www\\.hybridcoe\\.fi\\//.test(url)) continue;\n    const t = c.match(/liftup-title['\"]>([\\s\\S]*?)<\\/h\\d>/);\n    if (!t) continue;\n    const title = stripTags(t[1]);\n    if (/^Job opening/i.test(title)) continue;\n    const d = c.match(/liftup-date['\"]>\\s*([\\d.]+)\\s*</);\n    const date = parseDate((d || [])[1] || '');\n    if (!inWindow(date)) continue;\n    items.push({ sourceKey: cfg.sourceKey, source: cfg.label, type: 'news', title, url, date: isoDay(date), excerpt: '' });\n    if (items.length >= cfg.maxItems) break;\n  }\n  return items;\n}\n\nconst out = [];\nfor (let i = 0; i < responses.length; i++) {\n  const cfg = configs[i] || {};\n  const resp = responses[i].json || {};\n  const marker = (unavailable) => ({ json: { source: cfg.label, sourceKey: cfg.sourceKey, isEmpty: true, ...(unavailable ? { sourceUnavailable: cfg.label } : {}) } });\n  if (resp.error !== undefined) { out.push(marker(true)); continue; }\n  let body = '';\n  if (cfg.parser === 'jina') body = (resp.data && resp.data.content) ? resp.data.content : '';\n  else if (typeof resp.data === 'string') body = resp.data;\n  else if (typeof resp === 'string') body = resp;\n  if (!body) { out.push(marker(true)); continue; }\n  let items = [];\n  try {\n    if (cfg.parser === 'jina') items = parseJina(body, cfg);\n    else if (cfg.parser === 'rss') items = parseRss(body, cfg);\n    else if (cfg.parser === 'hybridcoe') items = parseHybridcoe(body, cfg);\n  } catch (e) {\n    console.log('Parsefel ' + cfg.sourceKey + ': ' + e.message);\n    out.push(marker(true)); continue;\n  }\n  if (items.length === 0) out.push(marker(false));\n  else items.forEach(it => out.push({ json: it }));\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "kontinuitet-fetch-prev",
+      "name": "Fetch Previous Themes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        1144
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/38ea50aab0bd81a08d80d5778ce4f265/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer __NOTION_TOKEN__"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "{\"sorts\":[{\"property\":\"Datum\",\"direction\":\"descending\"}],\"page_size\":4}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "kontinuitet-parse-prev",
+      "name": "Parse Previous Themes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        1144
+      ],
+      "parameters": {
+        "jsCode": "// Parse Previous Themes 2026-06-10 — tema-kontinuitet.\n// Läser de senaste arkiverade veckorna ur Notion-arkivet som kontext till syntesen.\n// Notion otillgängligt => tomt resultat och logg — INGEN bortfallsmarkör i mailet,\n// eftersom kontinuitet är en förbättring och inte ett källberoende.\nconst resp = $input.first().json || {};\nconst config = $('Detect Execution Mode').first().json;\nconst weeks = [];\ntry {\n  if (resp.error !== undefined) throw new Error(typeof resp.error === 'string' ? resp.error : JSON.stringify(resp.error).substring(0, 120));\n  const pages = resp.results || [];\n  for (const p of pages) {\n    const props = p.properties || {};\n    const datum = (props['Datum'] && props['Datum'].date) ? props['Datum'].date.start : '';\n    // Hoppa över sidor från innevarande period (självreferens vid omkörning samma vecka)\n    if (datum && config.dateTo && datum >= config.dateTo) continue;\n    const summary = ((props['Sammanfattning'] || {}).rich_text || []).map(t => t.plain_text || '').join('');\n    const themes = ((props['Teman'] || {}).multi_select || []).map(t => t.name);\n    const vecka = (props['Vecka'] || {}).number;\n    const period = ((props['Period'] || {}).rich_text || []).map(t => t.plain_text || '').join('');\n    if (themes.length || summary) weeks.push({ type: 'previous_week', vecka, period, datum, summary, themes });\n    if (weeks.length >= 3) break;\n  }\n} catch (e) {\n  console.log('Tema-kontinuitet: kunde inte läsa arkivet, fortsätter utan. ' + e.message);\n}\nif (weeks.length === 0) return [{ json: { isEmpty: true, source: 'Notion-arkiv' } }];\nreturn weeks.map(w => ({ json: w }));"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Merge Triggers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Triggers": {
+      "main": [
+        [
+          {
+            "node": "Detect Execution Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Execution Mode": {
+      "main": [
+        [
+          {
+            "node": "Fetch FOI Reports",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch MCF News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Carl Heath RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch One Useful Thing RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Curated Articles",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Manual Quotes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Regeringen RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch MTFA News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch MTFA Rapporter",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Omni Sitemap",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch category-1 v3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Energimyndigheten Energiläge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Brent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch TTF Gas",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Urea",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set Hormuz Config",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch FOI Rapporter Page",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Compute Riksdag Date Range",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Source Config (Fas 3)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Previous Themes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Regeringen RSS": {
+      "main": [
+        [
+          {
+            "node": "Parse Regeringen RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Regeringen RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "Fetch FOI Reports": {
+      "main": [
+        [
+          {
+            "node": "Parse FOI Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse FOI Results": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch MCF News": {
+      "main": [
+        [
+          {
+            "node": "Parse MCF News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse MCF News": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch Carl Heath RSS": {
+      "main": [
+        [
+          {
+            "node": "Parse Carl Heath RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Carl Heath RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Fetch One Useful Thing RSS": {
+      "main": [
+        [
+          {
+            "node": "Parse One Useful Thing RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse One Useful Thing RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Fetch Curated Articles": {
+      "main": [
+        [
+          {
+            "node": "Filter Active URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Active URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch Article Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Article Content": {
+      "main": [
+        [
+          {
+            "node": "Parse Curated Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Curated Articles": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Fetch Manual Quotes": {
+      "main": [
+        [
+          {
+            "node": "Filter Manual Quotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Manual Quotes": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Merge All Sources": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate All Results": {
+      "main": [
+        [
+          {
+            "node": "Prepare Synthesis Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export Mode Check": {
+      "main": [
+        [
+          {
+            "node": "Respond with Export",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Synthesis Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Synthesis Request": {
+      "main": [
+        [
+          {
+            "node": "Call Synthesis AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Synthesis AI": {
+      "main": [
+        [
+          {
+            "node": "Parse Synthesis Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Synthesis Response": {
+      "main": [
+        [
+          {
+            "node": "Generate HTML Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HTML Email": {
+      "main": [
+        [
+          {
+            "node": "Should Send Email?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Förbered text för TTS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Notion Archive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Send Email?": {
+      "main": [
+        [
+          {
+            "node": "Send Weekly Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return JSON Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "Merge Triggers",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Förbered text för TTS": {
+      "main": [
+        [
+          {
+            "node": "ElevenLabs TTS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ElevenLabs TTS": {
+      "main": [
+        [
+          {
+            "node": "Upload file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Notion Archive": {
+      "main": [
+        [
+          {
+            "node": "Archive to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Build Domain Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Domain Context": {
+      "main": [
+        []
+      ]
+    },
+    "Fetch MTFA News": {
+      "main": [
+        [
+          {
+            "node": "Merge MTFA Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch MTFA Rapporter": {
+      "main": [
+        [
+          {
+            "node": "Merge MTFA Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parse MTFA Results": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge MTFA Sources": {
+      "main": [
+        [
+          {
+            "node": "Parse MTFA Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Omni Sitemap": {
+      "main": [
+        [
+          {
+            "node": "Filter Omni Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Omni Candidates": {
+      "main": [
+        [
+          {
+            "node": "Fetch Omni Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Omni Article": {
+      "main": [
+        [
+          {
+            "node": "Parse Omni Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Omni Articles": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 7
+          }
+        ]
+      ]
+    },
+    "Fetch category-1 v3": {
+      "main": [
+        [
+          {
+            "node": "Split category-1 items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Energimyndigheten Energiläge": {
+      "main": [
+        [
+          {
+            "node": "Parse Energiläge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Brent": {
+      "main": [
+        [
+          {
+            "node": "Parse Brent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch TTF Gas": {
+      "main": [
+        [
+          {
+            "node": "Parse TTF Gas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Urea": {
+      "main": [
+        [
+          {
+            "node": "Parse Urea",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Brent": {
+      "main": [
+        [
+          {
+            "node": "Merge Hormuz Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse TTF Gas": {
+      "main": [
+        [
+          {
+            "node": "Merge Hormuz Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parse Urea": {
+      "main": [
+        [
+          {
+            "node": "Merge Hormuz Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Hormuz Sources": {
+      "main": [
+        [
+          {
+            "node": "Filter Hormuz Active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split category-1 items": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 8
+          }
+        ]
+      ]
+    },
+    "Parse Energiläge": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 10
+          }
+        ]
+      ]
+    },
+    "Fetch FOI Rapporter Page": {
+      "main": [
+        [
+          {
+            "node": "Parse FOI Rapporter Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse FOI Rapporter Page": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 11
+          }
+        ]
+      ]
+    },
+    "Filter Hormuz Active": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 12
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger (Sunday 19:30)": {
+      "main": [
+        [
+          {
+            "node": "Merge Triggers",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Compute Riksdag Date Range": {
+      "main": [
+        [
+          {
+            "node": "Fetch Riksdag Documents",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Riksdag Votes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Riksdag Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Riksdag Documents": {
+      "main": [
+        [
+          {
+            "node": "Parse Riksdag Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Riksdag Votes": {
+      "main": [
+        [
+          {
+            "node": "Parse Riksdag Votes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Riksdag Calendar": {
+      "main": [
+        [
+          {
+            "node": "Parse Riksdag Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Riksdag Documents": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 13
+          }
+        ]
+      ]
+    },
+    "Parse Riksdag Votes": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 14
+          }
+        ]
+      ]
+    },
+    "Parse Riksdag Calendar": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 15
+          }
+        ]
+      ]
+    },
+    "Source Config (Fas 3)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Source (Fas 3)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Source (Fas 3)": {
+      "main": [
+        [
+          {
+            "node": "Parse Sources (Fas 3)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Sources (Fas 3)": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 9
+          }
+        ]
+      ]
+    },
+    "Fetch Previous Themes": {
+      "main": [
+        [
+          {
+            "node": "Parse Previous Themes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Previous Themes": {
+      "main": [
+        [
+          {
+            "node": "Merge All Sources",
+            "type": "main",
+            "index": 16
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "timezone": "Europe/Stockholm"
+  },
+  "staticData": {
+    "node:Schedule Trigger (Monday 8 AM)": {
+      "recurrenceRules": []
+    }
+  },
+  "pinData": {
+    "When clicking 'Execute workflow'": [
+      {
+        "json": {},
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  }
+}
